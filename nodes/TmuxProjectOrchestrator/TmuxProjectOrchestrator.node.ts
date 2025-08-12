@@ -56,6 +56,11 @@ export class TmuxProjectOrchestrator implements INodeType {
 						description: 'Get comprehensive project status with QA metrics',
 					},
 					{
+						name: 'Get All Projects Status',
+						value: 'getAllProjectsStatus',
+						description: 'Get status of all running and recently finished projects',
+					},
+					{
 						name: 'Generate Report',
 						value: 'generateReport',
 						description: 'Generate detailed project report with quality metrics',
@@ -410,6 +415,9 @@ export class TmuxProjectOrchestrator implements INodeType {
 					case 'getStatus':
 						result = await TmuxProjectOrchestrator.handleGetStatus(this, i, bridge);
 						break;
+					case 'getAllProjectsStatus':
+						result = await TmuxProjectOrchestrator.handleGetAllProjectsStatus(this, i, bridge);
+						break;
 					case 'generateReport':
 						result = await TmuxProjectOrchestrator.handleGenerateReport(this, i, bridge);
 						break;
@@ -702,8 +710,92 @@ Remember: YOU are the gatekeeper for code quality. No compromises on quality sta
 
 	private static async initializeAgentShells(projectName: string, windows: string[], bridge: TmuxBridge): Promise<void> {
 		try {
-			// Source the agent aliases script in each window
-			const aliasesPath = path.resolve(__dirname, '../../utils/agent_aliases.sh');
+			// Use PathResolver to locate the agent aliases script
+			let aliasesPath: string;
+			try {
+				aliasesPath = TmuxProjectOrchestrator.staticPathResolver.getScriptPath('agent_aliases.sh');
+			} catch (error) {
+				console.warn('Failed to locate agent_aliases.sh script:', error.message);
+				// Fallback to manual definition of STATUS function
+				const statusDefinition = `
+# Fallback STATUS function
+STATUS() {
+    local role="\${AGENT_ROLE:-developer}"
+    local timestamp=\$(date +"%H:%M:%S")
+    
+    case "\$role" in
+        "project-manager")
+            echo "[\$timestamp] PROJECT STATUS: Coordinating team activities. Monitoring QA and development progress. Ready to assist with project management tasks."
+            ;;
+        "qa-engineer")
+            echo "[\$timestamp] QA STATUS: Systems operational. Ready to run tests and validate code quality. Awaiting code submissions for testing."
+            ;;
+        "developer")
+            echo "[\$timestamp] DEVELOPER STATUS: Ready for development tasks. Environment configured. Awaiting project requirements or code assignments."
+            echo "Current directory: \$(pwd)"
+            echo "Git status: \$(git status --porcelain 2>/dev/null | wc -l) files changed"
+            ;;
+        *)
+            echo "[\$timestamp] AGENT STATUS: Online and ready. Waiting for task assignments."
+            ;;
+    esac
+    
+    echo "Working directory: \$(pwd)"
+    echo "Active processes: \$(jobs | wc -l) background jobs"
+}
+export -f STATUS
+alias "STATUS REQUEST"='STATUS'
+alias "status"='STATUS'
+alias "Status"='STATUS'
+
+PROGRESS() {
+    local percentage="\${1:-0}"
+    echo "Progress: \${percentage}% complete"
+    echo "Last updated: \$(date)"
+}
+export -f PROGRESS
+
+BLOCKERS() {
+    echo "Current blockers: \${1:-None}"
+    echo "Reported at: \$(date)"
+}
+export -f BLOCKERS
+`;
+				
+				for (let i = 0; i < windows.length; i++) {
+					const windowName = windows[i];
+					
+					// Wait a bit for window to be ready
+					await new Promise(resolve => setTimeout(resolve, 2000));
+					
+					// Define the STATUS functions directly
+					await bridge.sendCommandToWindow(projectName, i, statusDefinition);
+					
+					// Set appropriate AGENT_ROLE environment variable
+					let role = 'developer';
+					if (windowName.toLowerCase().includes('project') || windowName.toLowerCase().includes('manager') || i === 0) {
+						role = 'project-manager';
+					} else if (windowName.toLowerCase().includes('qa') || windowName.toLowerCase().includes('test') || i === 1) {
+						role = 'qa-engineer';
+					}
+					
+					await bridge.sendCommandToWindow(projectName, i, `export AGENT_ROLE="${role}"`);
+					
+					// Update PS1 to show role
+					await bridge.sendCommandToWindow(projectName, i, `export PS1="[${role}] \\u@\\h:\\w\\$ "`);
+					
+					// Clear screen and show welcome message
+					await bridge.sendCommandToWindow(projectName, i, 'clear');
+					await bridge.sendCommandToWindow(projectName, i, `echo "Agent shell initialized as: ${role}"`);
+					await bridge.sendCommandToWindow(projectName, i, 'echo "Available commands: STATUS, PROGRESS [%], BLOCKERS [description]"');
+				}
+				return; // Exit early since we used fallback
+			}
+			
+			// Check if the script file exists and is accessible
+			if (!fs.existsSync(aliasesPath)) {
+				throw new Error(`Agent aliases script not found at: ${aliasesPath}`);
+			}
 			
 			for (let i = 0; i < windows.length; i++) {
 				const windowName = windows[i];
@@ -711,8 +803,13 @@ Remember: YOU are the gatekeeper for code quality. No compromises on quality sta
 				// Wait a bit for window to be ready
 				await new Promise(resolve => setTimeout(resolve, 2000));
 				
-				// Source the aliases script
-				await bridge.sendCommandToWindow(projectName, i, `source "${aliasesPath}"`);
+				// Source the aliases script with error handling
+				try {
+					await bridge.sendCommandToWindow(projectName, i, `if [ -f "${aliasesPath}" ]; then source "${aliasesPath}"; echo "Agent aliases loaded successfully"; else echo "ERROR: Agent aliases script not found at ${aliasesPath}"; fi`);
+				} catch (sourceError) {
+					console.warn(`Failed to source agent aliases in window ${i}:`, sourceError.message);
+					// Continue with other windows
+				}
 				
 				// Set appropriate AGENT_ROLE environment variable
 				let role = 'developer';
@@ -1029,6 +1126,110 @@ exit 0`;
 			};
 		} catch (error) {
 			throw new Error(`Failed to get status: ${error.message}`);
+		}
+	}
+
+	static async handleGetAllProjectsStatus(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+		try {
+			// Get all tmux sessions
+			const sessions = await bridge.getTmuxSessions();
+			
+			if (!sessions || sessions.length === 0) {
+				return {
+					success: true,
+					projectCount: 0,
+					runningProjects: [],
+					finishedProjects: [],
+					message: 'No active tmux sessions found',
+					lastUpdated: new Date().toISOString(),
+				};
+			}
+
+			const runningProjects = [];
+			const finishedProjects = [];
+			let totalTeamMembers = 0;
+
+			// Process each session
+			for (const session of sessions) {
+				try {
+					const projectName = session.name;
+					
+					// Try to load project state
+					const stateFile = `/tmp/${projectName}_state.json`;
+					let projectState = null;
+					
+					if (fs.existsSync(stateFile)) {
+						try {
+							projectState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+						} catch (error) {
+							console.warn(`Failed to read state file for ${projectName}:`, error.message);
+						}
+					}
+
+					// Check QA approval status
+					const qaApprovalFile = `/tmp/${projectName}_qa_approval.flag`;
+					const qaApproved = fs.existsSync(qaApprovalFile);
+
+					// Count total team members
+					totalTeamMembers += session.windows.length;
+
+					// Quick team health check
+					const teamHealth = TmuxProjectOrchestrator.assessProjectHealth(session.windows, qaApproved);
+
+					// Get complete project info
+					const projectInfo = {
+						name: projectName,
+						status: projectState?.status || 'active',
+						teamSize: session.windows.length,
+						qaApprovalStatus: qaApproved ? 'approved' : 'pending',
+						commitBlocked: !qaApproved,
+						qualityLevel: projectState?.qualityRequirements || 'unknown',
+						created: projectState?.created || 'unknown',
+						lastActivity: new Date().toISOString(),
+						teamHealth: teamHealth.health,
+						activeWindows: teamHealth.activeWindows,
+						issues: teamHealth.issues,
+					};
+
+					// Categorize as running or finished
+					if (session.attached || projectState?.status === 'active') {
+						runningProjects.push(projectInfo);
+					} else {
+						finishedProjects.push(projectInfo);
+					}
+				} catch (error) {
+					// If there's an error processing a specific project, log it but continue
+					console.warn(`Error processing project ${session.name}:`, error.message);
+				}
+			}
+
+			// Overall system metrics
+			const totalProjects = runningProjects.length + finishedProjects.length;
+			const healthyProjects = runningProjects.filter(p => p.teamHealth === 'good').length;
+			const blockedProjects = runningProjects.filter(p => p.commitBlocked).length;
+
+			// Generate recommendations
+			const recommendations = TmuxProjectOrchestrator.generateSystemRecommendations(runningProjects, finishedProjects);
+
+			return {
+				success: true,
+				timestamp: new Date().toISOString(),
+				overview: {
+					totalProjects,
+					runningProjects: runningProjects.length,
+					finishedProjects: finishedProjects.length,
+					totalTeamMembers,
+					healthyProjects,
+					blockedProjects,
+					systemHealth: TmuxProjectOrchestrator.calculateSystemHealth(runningProjects),
+				},
+				runningProjects: runningProjects.sort((a, b) => a.name.localeCompare(b.name)),
+				finishedProjects: finishedProjects.sort((a, b) => a.name.localeCompare(b.name)),
+				recommendations,
+				message: `Found ${totalProjects} projects: ${runningProjects.length} running, ${finishedProjects.length} finished`,
+			};
+		} catch (error) {
+			throw new Error(`Failed to get all projects status: ${error.message}`);
 		}
 	}
 
@@ -1942,5 +2143,91 @@ Performance is a quality attribute - ensure all performance work is QA validated
 		};
 
 		return briefings[role] || `You are a team member on this project. All work requires QA validation before git commits.`;
+	}
+
+	/**
+	 * Assess project health based on team windows and QA status
+	 */
+	private static assessProjectHealth(windows: any[], qaApproved: boolean): { health: string; activeWindows: number; issues: string[] } {
+		const activeWindows = windows.filter(w => w.active).length;
+		const issues = [];
+		
+		// Check for essential team members
+		const hasPM = windows.some(w => w.windowIndex === 0);
+		const hasQA = windows.some(w => w.windowIndex === 1);
+		
+		if (!hasPM) issues.push('Missing Project Manager');
+		if (!hasQA) issues.push('Missing QA Engineer');
+		if (!qaApproved) issues.push('Commits blocked - QA approval needed');
+		
+		// Determine health based on team size, active windows, and issues
+		let health = 'good';
+		if (issues.length > 2) {
+			health = 'critical';
+		} else if (issues.length > 0 || activeWindows === 0) {
+			health = 'warning';
+		} else if (windows.length < 2) {
+			health = 'minimal';
+		}
+		
+		return { health, activeWindows, issues };
+	}
+
+	/**
+	 * Generate system-wide recommendations
+	 */
+	private static generateSystemRecommendations(runningProjects: any[], _finishedProjects: any[]): string[] {
+		const recommendations = [];
+		
+		const criticalProjects = runningProjects.filter(p => p.teamHealth === 'critical');
+		if (criticalProjects.length > 0) {
+			recommendations.push(`${criticalProjects.length} projects in critical state - immediate attention needed`);
+		}
+		
+		const blockedProjects = runningProjects.filter(p => p.commitBlocked);
+		if (blockedProjects.length > 0) {
+			recommendations.push(`${blockedProjects.length} projects have blocked commits - run QA tests to unblock`);
+		}
+		
+		const inactiveProjects = runningProjects.filter(p => p.activeWindows === 0);
+		if (inactiveProjects.length > 0) {
+			recommendations.push(`${inactiveProjects.length} projects have no active team members - check for stalled work`);
+		}
+		
+		// Resource optimization recommendations
+		if (runningProjects.length > 10) {
+			recommendations.push('Consider consolidating similar projects to optimize resource usage');
+		}
+		
+		if (recommendations.length === 0) {
+			recommendations.push('All projects appear healthy - continue monitoring');
+		}
+		
+		return recommendations;
+	}
+
+	/**
+	 * Calculate overall system health
+	 */
+	private static calculateSystemHealth(runningProjects: any[]): string {
+		if (runningProjects.length === 0) return 'idle';
+		
+		const healthScores = runningProjects.map(project => {
+			switch (project.teamHealth) {
+				case 'good': return 4;
+				case 'minimal': return 3;
+				case 'warning': return 2;
+				case 'critical': return 1;
+				default: return 0;
+			}
+		});
+		
+		const avgScore = healthScores.reduce((a, b) => a + b, 0) / healthScores.length;
+		
+		if (avgScore >= 3.5) return 'excellent';
+		if (avgScore >= 2.5) return 'good';
+		if (avgScore >= 1.5) return 'fair';
+		if (avgScore >= 0.5) return 'poor';
+		return 'critical';
 	}
 }

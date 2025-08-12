@@ -18,6 +18,7 @@ export declare class TmuxProjectOrchestrator implements INodeType {
     private static safeTempFileWrite;
     private safeTempFileRead;
     static handleGetStatus(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any>;
+    static handleGetAllProjectsStatus(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any>;
     static handleGenerateReport(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any>;
     static handleScheduleTask(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any>;
     static handleManageTeam(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any>;
@@ -39,4 +40,7 @@ export declare class TmuxProjectOrchestrator implements INodeType {
     private static assessTaskPriority;
     private static getWindowNameForRole;
     private static getRoleBriefing;
+    private static assessProjectHealth;
+    private static generateSystemRecommendations;
+    private static calculateSystemHealth;
 }
