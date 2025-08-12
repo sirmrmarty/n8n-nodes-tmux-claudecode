@@ -1,0 +1,226 @@
+{
+  "name": "Intelligent Subagent Orchestration",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "name": "Every 30 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "checkSubagentOpportunities"
+      },
+      "name": "Check for Subagent Needs",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxAgentMonitor",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.opportunitiesFound }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Opportunities Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const opportunities = $input.first().json.opportunities;\nconst results = [];\n\nfor (const opp of opportunities) {\n  results.push({\n    json: {\n      target: opp.target,\n      agentType: opp.agentType,\n      context: `Agent shows: ${opp.indicators.keywords.join(', ')}`,\n      suggestedSubagents: opp.suggestedSubagents\n    }\n  });\n}\n\nreturn results;"
+      },
+      "name": "Process Opportunities",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [850, 250]
+    },
+    {
+      "parameters": {
+        "operation": "suggestSubagent",
+        "targetWindow": "={{ $json.target }}",
+        "agentType": "={{ $json.agentType }}",
+        "suggestionContext": "={{ $json.context }}"
+      },
+      "name": "Send Subagent Suggestions",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxOrchestrator",
+      "typeVersion": 1,
+      "position": [1050, 250]
+    },
+    {
+      "parameters": {
+        "operation": "scheduleCheckIn",
+        "targetWindow": "={{ $json.target }}",
+        "minutesUntil": 15,
+        "checkInNote": "Following up on subagent suggestion. Did you deploy any subagents? How is your workload?"
+      },
+      "name": "Schedule Follow-up",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxScheduler",
+      "typeVersion": 1,
+      "position": [1250, 250]
+    },
+    {
+      "parameters": {
+        "channel": "#orchestrator-alerts",
+        "text": "✅ Sent subagent suggestions to {{ $node['Check for Subagent Needs'].json.opportunitiesFound }} agents",
+        "attachments": [
+          {
+            "color": "#00ff00",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Agents Helped",
+                  "value": "={{ $node['Check for Subagent Needs'].json.opportunities.map(o => o.window).join(', ') }}"
+                },
+                {
+                  "short": true,
+                  "name": "Suggested Subagents",
+                  "value": "={{ $json.suggestedSubagents.join(', ') }}"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify Success",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1450, 250]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "All agents working efficiently"
+            }
+          ],
+          "number": [
+            {
+              "name": "checkedSessions",
+              "value": "={{ $node['Check for Subagent Needs'].json.checkedSessions }}"
+            }
+          ]
+        }
+      },
+      "name": "No Action Needed",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "operation": "monitorSnapshot"
+      },
+      "name": "Create Monitoring Report",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxAgentMonitor",
+      "typeVersion": 1,
+      "position": [1050, 450]
+    }
+  ],
+  "connections": {
+    "Every 30 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check for Subagent Needs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check for Subagent Needs": {
+      "main": [
+        [
+          {
+            "node": "Opportunities Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Opportunities Found?": {
+      "main": [
+        [
+          {
+            "node": "Process Opportunities",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Action Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Opportunities": {
+      "main": [
+        [
+          {
+            "node": "Send Subagent Suggestions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Subagent Suggestions": {
+      "main": [
+        [
+          {
+            "node": "Schedule Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Notify Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Action Needed": {
+      "main": [
+        [
+          {
+            "node": "Create Monitoring Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

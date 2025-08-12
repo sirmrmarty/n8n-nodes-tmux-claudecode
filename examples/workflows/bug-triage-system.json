@@ -1,0 +1,293 @@
+{
+  "name": "24/7 Bug Triage System",
+  "nodes": [
+    {
+      "parameters": {
+        "events": ["issues.opened", "issues.labeled"]
+      },
+      "name": "GitHub Issue Trigger",
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.issue.labels[0].name }}",
+              "value2": "bug"
+            }
+          ]
+        }
+      },
+      "name": "Is Bug?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "createProject",
+        "projectName": "bug-{{ $json.issue.number }}",
+        "projectPath": "/tmp/bug-triage/{{ $json.issue.number }}",
+        "projectSpec": "BUG TRIAGE #{{ $json.issue.number }}\n\nTitle: {{ $json.issue.title }}\n\nDescription:\n{{ $json.issue.body }}\n\nRepository: {{ $json.repository.full_name }}\n\nPriority: {{ $json.issue.labels }}\n\nObjective: Reproduce, analyze, and provide fix recommendation",
+        "teamSize": "small"
+      },
+      "name": "Create Bug Triage Project",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxProjectManager",
+      "typeVersion": 1,
+      "position": [650, 250]
+    },
+    {
+      "parameters": {
+        "operation": "assignTask",
+        "projectSession": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}",
+        "taskDescription": "1. Clone repository\n2. Reproduce the bug\n3. Identify root cause\n4. Propose fix\n5. Create test case",
+        "targetAgent": "1",
+        "priority": "HIGH"
+      },
+      "name": "Assign Bug Analysis",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxProjectManager",
+      "typeVersion": 1,
+      "position": [850, 250]
+    },
+    {
+      "parameters": {
+        "operation": "scheduleCheckIn",
+        "targetWindow": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}:0",
+        "minutesUntil": 30,
+        "checkInNote": "Provide status update on bug analysis"
+      },
+      "name": "Schedule Progress Check",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxScheduler",
+      "typeVersion": 1,
+      "position": [1050, 250]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "minutes"
+      },
+      "name": "Wait for Analysis",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1250, 250]
+    },
+    {
+      "parameters": {
+        "operation": "getProgress",
+        "projectSession": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}"
+      },
+      "name": "Get Analysis Status",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxProjectManager",
+      "typeVersion": 1,
+      "position": [1450, 250]
+    },
+    {
+      "parameters": {
+        "operation": "healthCheck",
+        "targetSessions": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}",
+        "responseTimeout": 5
+      },
+      "name": "Check Agent Health",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxAgentMonitor",
+      "typeVersion": 1,
+      "position": [1650, 250]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.summary.healthy }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Is Healthy?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1850, 250]
+    },
+    {
+      "parameters": {
+        "operation": "collectLogs",
+        "targetSessions": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}",
+        "linesPerWindow": 500,
+        "saveToFile": true,
+        "outputDirectory": "/tmp/bug-triage-logs"
+      },
+      "name": "Collect Analysis Logs",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxAgentMonitor",
+      "typeVersion": 1,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "owner": "={{ $node['GitHub Issue Trigger'].json.repository.owner.login }}",
+        "repository": "={{ $node['GitHub Issue Trigger'].json.repository.name }}",
+        "issueNumber": "={{ $node['GitHub Issue Trigger'].json.issue.number }}",
+        "body": "## 🐛 Bug Analysis Report\n\n### Status\n{{ $node['Get Analysis Status'].json.pmStatus }}\n\n### Team Activity\n{{ $node['Get Analysis Status'].json.teamStatus }}\n\n### Next Steps\nThe bug triage team is actively working on this issue."
+      },
+      "name": "Update Issue",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2250, 200]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "targetWindow": "bug-{{ $node['GitHub Issue Trigger'].json.issue.number }}:1",
+        "message": "Agent appears stuck. Please check for any blockers and restart if necessary."
+      },
+      "name": "Send Recovery Message",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxOrchestrator",
+      "typeVersion": 1,
+      "position": [2050, 350]
+    },
+    {
+      "parameters": {
+        "channel": "#bug-triage",
+        "text": "⚠️ Bug triage agent for issue #{{ $node['GitHub Issue Trigger'].json.issue.number }} is not responding. Manual intervention may be required.",
+        "attachments": []
+      },
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [2250, 350]
+    }
+  ],
+  "connections": {
+    "GitHub Issue Trigger": {
+      "main": [
+        [
+          {
+            "node": "Is Bug?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Bug?": {
+      "main": [
+        [
+          {
+            "node": "Create Bug Triage Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Bug Triage Project": {
+      "main": [
+        [
+          {
+            "node": "Assign Bug Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assign Bug Analysis": {
+      "main": [
+        [
+          {
+            "node": "Schedule Progress Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Progress Check": {
+      "main": [
+        [
+          {
+            "node": "Wait for Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Analysis": {
+      "main": [
+        [
+          {
+            "node": "Get Analysis Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Analysis Status": {
+      "main": [
+        [
+          {
+            "node": "Check Agent Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Agent Health": {
+      "main": [
+        [
+          {
+            "node": "Is Healthy?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Healthy?": {
+      "main": [
+        [
+          {
+            "node": "Collect Analysis Logs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Recovery Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Analysis Logs": {
+      "main": [
+        [
+          {
+            "node": "Update Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Recovery Message": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

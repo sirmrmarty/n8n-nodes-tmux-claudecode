@@ -1,0 +1,150 @@
+{
+  "name": "Automated Code Review Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerOn": "create"
+      },
+      "name": "GitHub PR Trigger",
+      "type": "n8n-nodes-base.githubTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "deployAgent",
+        "sessionName": "={{ $json.pull_request.number }}-review",
+        "projectPath": "={{ $json.repository.clone_url }}",
+        "agentRole": "codeReviewer",
+        "initialBriefing": "Review PR #{{ $json.pull_request.number }}: {{ $json.pull_request.title }}\n\nDescription: {{ $json.pull_request.body }}\n\nFocus on:\n- Code quality and best practices\n- Security vulnerabilities\n- Performance implications\n- Test coverage"
+      },
+      "name": "Deploy Code Reviewer",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxOrchestrator",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "scheduleCheckIn",
+        "targetWindow": "={{ $json.sessionName }}:0",
+        "minutesUntil": 10,
+        "checkInNote": "Please provide your initial code review findings"
+      },
+      "name": "Schedule Review Check",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxScheduler",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "amount": 600000,
+        "unit": "milliseconds"
+      },
+      "name": "Wait for Review",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "captureOutput",
+        "targetWindow": "={{ $node['Deploy Code Reviewer'].json.sessionName }}:0",
+        "numLines": 200
+      },
+      "name": "Capture Review Results",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxOrchestrator",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "owner": "={{ $node['GitHub PR Trigger'].json.repository.owner.login }}",
+        "repository": "={{ $node['GitHub PR Trigger'].json.repository.name }}",
+        "issueNumber": "={{ $node['GitHub PR Trigger'].json.pull_request.number }}",
+        "body": "## 🤖 Automated Code Review\n\n{{ $json.output }}"
+      },
+      "name": "Post Review Comment",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "terminateAgent",
+        "targetWindow": "={{ $node['Deploy Code Reviewer'].json.sessionName }}:0"
+      },
+      "name": "Cleanup Agent",
+      "type": "n8n-nodes-tmux-orchestrator.tmuxOrchestrator",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    }
+  ],
+  "connections": {
+    "GitHub PR Trigger": {
+      "main": [
+        [
+          {
+            "node": "Deploy Code Reviewer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deploy Code Reviewer": {
+      "main": [
+        [
+          {
+            "node": "Schedule Review Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Review Check": {
+      "main": [
+        [
+          {
+            "node": "Wait for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Review": {
+      "main": [
+        [
+          {
+            "node": "Capture Review Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capture Review Results": {
+      "main": [
+        [
+          {
+            "node": "Post Review Comment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post Review Comment": {
+      "main": [
+        [
+          {
+            "node": "Cleanup Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

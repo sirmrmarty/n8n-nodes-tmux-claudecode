@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--project-ref=kmghuekgzyfrnbanbsra"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "sbp_5a0272714253f436fa566fb2e6e32f29ce4e09fc"
+      }
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/marwim/n8n_claude_tmux"
+      ]
+    }
+  }
+}

@@ -1,0 +1,696 @@
+{
+  "name": "QA-Integrated Project Management",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "start-project",
+        "options": {}
+      },
+      "name": "Project Start Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "project-start"
+    },
+    {
+      "parameters": {
+        "operation": "createProject",
+        "projectIdea": "={{ $json.projectIdea }}",
+        "projectName": "={{ $json.projectName }}",
+        "projectPath": "={{ $json.projectPath }}",
+        "qualityRequirements": "={{ $json.qualityLevel || 'standard' }}"
+      },
+      "name": "Create QA-Integrated Project",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.success }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Project Created?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#project-management",
+        "text": "🚀 New project created: {{ $node['Create QA-Integrated Project'].json.projectName }}",
+        "attachments": [
+          {
+            "color": "#36a64f",
+            "title": "Project Details",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project Name",
+                  "value": "={{ $node['Create QA-Integrated Project'].json.projectName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Quality Level",
+                  "value": "={{ $node['Create QA-Integrated Project'].json.qualityRequirements }}"
+                },
+                {
+                  "short": false,
+                  "name": "Generated Plan",
+                  "value": "{{ $node['Create QA-Integrated Project'].json.generatedPlan }}"
+                },
+                {
+                  "short": false,
+                  "name": "Next Step",
+                  "value": "{{ $node['Create QA-Integrated Project'].json.nextStep }}"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify Project Created",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "approve-plan",
+        "options": {}
+      },
+      "name": "Plan Approval Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 600],
+      "webhookId": "approve-plan"
+    },
+    {
+      "parameters": {
+        "operation": "approvePlan",
+        "sessionName": "={{ $json.projectName }}",
+        "planModifications": "={{ $json.modifications || '' }}"
+      },
+      "name": "Approve Project Plan",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 900]
+    },
+    {
+      "parameters": {
+        "operation": "getStatus",
+        "sessionName": "={{ $json.projectName || 'active-project' }}"
+      },
+      "name": "Check Project Status",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [460, 900]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.commitBlocked }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Commits Blocked?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 900]
+    },
+    {
+      "parameters": {
+        "channel": "#qa-alerts",
+        "text": "🚨 QA Action Required",
+        "attachments": [
+          {
+            "color": "#ff9900",
+            "title": "Commits Blocked - QA Validation Needed",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project",
+                  "value": "={{ $json.projectName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Status",
+                  "value": "={{ $json.qaApprovalStatus }}"
+                },
+                {
+                  "short": false,
+                  "name": "Recommendations",
+                  "value": "={{ $json.recommendations.join('\\n') }}"
+                }
+              ]
+            },
+            "actions": [
+              {
+                "name": "run_qa_tests",
+                "text": "Run QA Tests",
+                "type": "button",
+                "url": "{{ $node['Every 15 Minutes'].json.webhook_url }}/run-qa-tests"
+              }
+            ]
+          }
+        ]
+      },
+      "name": "Alert QA Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 800]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "run-qa-tests",
+        "options": {}
+      },
+      "name": "QA Test Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 1200],
+      "webhookId": "run-qa-tests"
+    },
+    {
+      "parameters": {
+        "operation": "runQATests",
+        "sessionName": "={{ $json.projectName }}",
+        "testTypes": ["unit", "integration", "security"]
+      },
+      "name": "Execute QA Tests",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [460, 1200]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "name": "Wait for Test Completion",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [680, 1200]
+    },
+    {
+      "parameters": {
+        "channel": "#qa-results",
+        "text": "🧪 QA Tests Executed",
+        "attachments": [
+          {
+            "color": "#0066cc",
+            "title": "Test Results",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project",
+                  "value": "={{ $node['Execute QA Tests'].json.sessionName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Test Types",
+                  "value": "={{ $node['Execute QA Tests'].json.testTypes.join(', ') }}"
+                },
+                {
+                  "short": false,
+                  "name": "Status",
+                  "value": "{{ $node['Execute QA Tests'].json.status }}"
+                },
+                {
+                  "short": false,
+                  "name": "Next Step",
+                  "value": "QA Engineer should now review results and approve/reject commits"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify QA Results",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 1200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qa-decision",
+        "options": {}
+      },
+      "name": "QA Decision Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 1500],
+      "webhookId": "qa-decision"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.decision }}",
+              "operation": "equal",
+              "value2": "approve"
+            }
+          ]
+        }
+      },
+      "name": "Approve or Reject?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 1500]
+    },
+    {
+      "parameters": {
+        "operation": "approveCommit",
+        "sessionName": "={{ $json.projectName }}",
+        "commitMessage": "={{ $json.commitMessage || 'QA approved changes' }}",
+        "qaFeedback": "={{ $json.feedback }}"
+      },
+      "name": "Approve Commit",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [680, 1400]
+    },
+    {
+      "parameters": {
+        "operation": "blockCommit",
+        "sessionName": "={{ $json.projectName }}",
+        "commitMessage": "={{ $json.commitMessage || 'QA rejected changes' }}",
+        "qaFeedback": "={{ $json.feedback }}"
+      },
+      "name": "Block Commit",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [680, 1600]
+    },
+    {
+      "parameters": {
+        "channel": "#development",
+        "text": "✅ QA APPROVED - Git commits enabled",
+        "attachments": [
+          {
+            "color": "#36a64f",
+            "title": "Commit Approval",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project",
+                  "value": "={{ $json.sessionName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Status",
+                  "value": "Commits Enabled"
+                },
+                {
+                  "short": false,
+                  "name": "QA Feedback",
+                  "value": "={{ $json.qaFeedback }}"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify Approval",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 1400]
+    },
+    {
+      "parameters": {
+        "channel": "#development",
+        "text": "❌ QA BLOCKED - Commits disabled",
+        "attachments": [
+          {
+            "color": "#ff3300",
+            "title": "Commit Blocked",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project",
+                  "value": "={{ $json.sessionName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Status",
+                  "value": "Commits Blocked"
+                },
+                {
+                  "short": false,
+                  "name": "QA Feedback",
+                  "value": "={{ $json.qaFeedback }}"
+                },
+                {
+                  "short": false,
+                  "name": "Action Required",
+                  "value": "Address QA concerns and request new testing"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify Rejection",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 1600]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 1800]
+    },
+    {
+      "parameters": {
+        "operation": "generateReport",
+        "sessionName": "{{ $json.projectName || 'active-project' }}"
+      },
+      "name": "Generate Project Report",
+      "type": "@sirmrmarty/n8n-nodes-tmux-orchestrator.tmuxProjectOrchestrator",
+      "typeVersion": 1,
+      "position": [460, 1800]
+    },
+    {
+      "parameters": {
+        "channel": "#project-reports",
+        "text": "📊 Project Status Report",
+        "attachments": [
+          {
+            "color": "#0066cc",
+            "title": "Comprehensive Project Report",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Project",
+                  "value": "={{ $json.projectName }}"
+                },
+                {
+                  "short": true,
+                  "name": "Team Size",
+                  "value": "={{ $json.projectOverview.teamSize }}"
+                },
+                {
+                  "short": true,
+                  "name": "QA Status",
+                  "value": "={{ $json.qualityMetrics.qaStatus }}"
+                },
+                {
+                  "short": true,
+                  "name": "Error Rate",
+                  "value": "={{ $json.teamPerformance.errorRate }}%"
+                },
+                {
+                  "short": false,
+                  "name": "Risk Level",
+                  "value": "={{ $json.riskAssessment.riskLevel }}"
+                },
+                {
+                  "short": false,
+                  "name": "Recommendations",
+                  "value": "={{ $json.recommendations.slice(0, 3).join('\\n') }}"
+                }
+              ]
+            },
+            "actions": [
+              {
+                "name": "view_full_report",
+                "text": "View Full Report",
+                "type": "button",
+                "url": "file://{{ $json.reportSavedTo }}"
+              }
+            ]
+          }
+        ]
+      },
+      "name": "Share Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [680, 1800]
+    },
+    {
+      "parameters": {
+        "channel": "#project-management",
+        "text": "❌ Project creation failed",
+        "attachments": [
+          {
+            "color": "#ff3300",
+            "title": "Error Details",
+            "fields": {
+              "item": [
+                {
+                  "short": false,
+                  "name": "Error Message",
+                  "value": "={{ $json.error || 'Unknown error occurred' }}"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "name": "Notify Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [900, 400]
+    }
+  ],
+  "connections": {
+    "Project Start Webhook": {
+      "main": [
+        [
+          {
+            "node": "Create QA-Integrated Project",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create QA-Integrated Project": {
+      "main": [
+        [
+          {
+            "node": "Project Created?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Project Created?": {
+      "main": [
+        [
+          {
+            "node": "Notify Project Created",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Approval Webhook": {
+      "main": [
+        [
+          {
+            "node": "Approve Project Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check Project Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Project Status": {
+      "main": [
+        [
+          {
+            "node": "Commits Blocked?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commits Blocked?": {
+      "main": [
+        [
+          {
+            "node": "Alert QA Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Test Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execute QA Tests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute QA Tests": {
+      "main": [
+        [
+          {
+            "node": "Wait for Test Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Test Completion": {
+      "main": [
+        [
+          {
+            "node": "Notify QA Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QA Decision Webhook": {
+      "main": [
+        [
+          {
+            "node": "Approve or Reject?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve or Reject?": {
+      "main": [
+        [
+          {
+            "node": "Approve Commit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Block Commit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approve Commit": {
+      "main": [
+        [
+          {
+            "node": "Notify Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Block Commit": {
+      "main": [
+        [
+          {
+            "node": "Notify Rejection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Generate Project Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Project Report": {
+      "main": [
+        [
+          {
+            "node": "Share Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

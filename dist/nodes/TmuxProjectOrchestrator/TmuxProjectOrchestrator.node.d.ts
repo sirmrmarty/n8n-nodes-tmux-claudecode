@@ -1,0 +1,33 @@
+import type { IExecuteFunctions, INodeExecutionData, INodeType, INodeTypeDescription } from 'n8n-workflow';
+export declare class TmuxProjectOrchestrator implements INodeType {
+    description: INodeTypeDescription;
+    execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]>;
+    private createProject;
+    private approvePlan;
+    private getQAIntegratedWindows;
+    private generateAIProjectPrompt;
+    private getQAEngineerBriefing;
+    private setupQAGitHooks;
+    private getStatus;
+    private generateReport;
+    private scheduleTask;
+    private manageTeam;
+    private addTeamMember;
+    private removeTeamMember;
+    private listTeamMembers;
+    private conductStandup;
+    private runQATests;
+    private approveCommit;
+    private blockCommit;
+    private identifyAgentRole;
+    private generateStatusRecommendations;
+    private extractTestResults;
+    private extractGitActivity;
+    private calculateProductivity;
+    private generateProjectRecommendations;
+    private assessProjectRisks;
+    private getLastQAAction;
+    private assessTaskPriority;
+    private getWindowNameForRole;
+    private getRoleBriefing;
+}
