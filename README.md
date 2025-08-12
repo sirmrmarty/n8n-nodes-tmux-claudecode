@@ -14,13 +14,14 @@ Powerful n8n nodes for orchestrating Claude AI agents through tmux sessions. Ena
 
 ### Community Node (Recommended)
 1. In n8n, go to **Settings** > **Community Nodes**
-2. Search for `n8n-nodes-tmux-orchestrator`
-3. Click **Install**
+2. Click **Install**
+3. Enter **@sirmrmarty/n8n-nodes-tmux-claudecode**
+4. Confirm & enjoy!
 
 ### Manual Installation
 ```bash
 cd ~/.n8n/custom
-git clone https://github.com/marwim/n8n-nodes-tmux-orchestrator.git
+git clone https://github.com/sirmrmarty/n8n-nodes-tmux-claudecoder.git
 cd n8n-nodes-tmux-orchestrator
 npm install
 npm run build
@@ -284,11 +285,11 @@ MIT License - see [LICENSE](LICENSE) file.
 
 ## 🙏 Acknowledgments
 
-Built on top of the [Tmux Orchestrator](https://github.com/marwim/tmux-orchestrator) project.
+Built on top of the [N8N Tmux Orchestrator Claude Code](https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode) project.
 
 ## 🔗 Links
 
 - [n8n Documentation](https://docs.n8n.io)
-- [Tmux Orchestrator](https://github.com/marwim/tmux-orchestrator)
+- [Tmux Orchestrator](https://github.com/Jedward23/tmux-orchestrator)
 - [Claude AI](https://claude.ai)
 - [Report Issues](https://github.com/marwim/n8n-nodes-tmux-orchestrator/issues)
