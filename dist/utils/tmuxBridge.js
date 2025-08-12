@@ -140,7 +140,23 @@ class TmuxBridge {
     async captureWindowContentDirect(sessionName, windowIndex, numLines = 50) {
         try {
             const result = await this.executePython('capture_window_content', [sessionName, windowIndex, numLines]);
-            return result;
+            if (typeof result === 'string') {
+                return result;
+            }
+            else if (result === null || result === undefined) {
+                return '';
+            }
+            else if (typeof result === 'object') {
+                try {
+                    return JSON.stringify(result, null, 2);
+                }
+                catch (stringifyError) {
+                    return String(result);
+                }
+            }
+            else {
+                return String(result);
+            }
         }
         catch (error) {
             throw new Error(`Failed to capture window content: ${error.message}`);

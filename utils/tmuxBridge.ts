@@ -190,7 +190,23 @@ export class TmuxBridge {
 	private async captureWindowContentDirect(sessionName: string, windowIndex: number, numLines: number = 50): Promise<string> {
 		try {
 			const result = await this.executePython('capture_window_content', [sessionName, windowIndex, numLines]);
-			return result;
+			
+			// Ensure we always return a string for window content
+			if (typeof result === 'string') {
+				return result;
+			} else if (result === null || result === undefined) {
+				return '';
+			} else if (typeof result === 'object') {
+				// If Python returned JSON, convert to string representation
+				try {
+					return JSON.stringify(result, null, 2);
+				} catch (stringifyError) {
+					return String(result);
+				}
+			} else {
+				// Convert any other type to string
+				return String(result);
+			}
 		} catch (error) {
 			throw new Error(`Failed to capture window content: ${error.message}`);
 		}

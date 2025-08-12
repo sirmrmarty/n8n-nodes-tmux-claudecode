@@ -340,7 +340,18 @@ export class TmuxAgentMonitor implements INodeType {
 			for (const session of sessionsToCheck) {
 				for (const window of session.windows) {
 					const output = await bridge.captureWindowContent(session.name, window.windowIndex, 20);
-					const lastLines = output.split('\n').slice(-10).join('\n');
+					
+					// Safely process the captured output with type checking
+					let lastLines: string;
+					try {
+						if (typeof output === 'string' && output.length > 0) {
+							lastLines = output.split('\n').slice(-10).join('\n');
+						} else {
+							lastLines = output ? `Health data in unexpected format: ${typeof output}` : 'No health data available';
+						}
+					} catch (error) {
+						lastLines = `Error processing health data: ${error.message}`;
+					}
 					
 					const isHealthy = lastLines.includes('ACK') || lastLines.includes('operational');
 					const hasErrors = /error|exception|failed/i.test(lastLines);
@@ -464,8 +475,22 @@ export class TmuxAgentMonitor implements INodeType {
 						100
 					);
 
-					const lines = content.split('\n');
-					const recentLines = lines.slice(-20);
+					// Safely process the captured content with type checking
+					let lines: string[] = [];
+					let recentLines: string[] = [];
+					
+					try {
+						if (typeof content === 'string' && content.length > 0) {
+							lines = content.split('\n');
+							recentLines = lines.slice(-20);
+						} else if (content) {
+							lines = [];
+							recentLines = [];
+						}
+					} catch (error) {
+						lines = [];
+						recentLines = [];
+					}
 					
 					// Check for error keywords
 					const foundKeywords = [];
@@ -495,7 +520,7 @@ export class TmuxAgentMonitor implements INodeType {
 							foundKeywords,
 							isRepetitive,
 							waitingForInput,
-							context: recentLines.slice(-10).join('\n'),
+							context: recentLines.length > 0 ? recentLines.slice(-10).join('\n') : 'No context available',
 							suggestedAction: this.getSuggestedAction(foundKeywords, isRepetitive, waitingForInput),
 						});
 					}
@@ -584,7 +609,19 @@ export class TmuxAgentMonitor implements INodeType {
 						200
 					);
 
-					const lines = content.split('\n');
+					// Safely process the captured content with type checking
+					let lines: string[] = [];
+					
+					try {
+						if (typeof content === 'string' && content.length > 0) {
+							lines = content.split('\n');
+						} else if (content) {
+							lines = [];
+						}
+					} catch (error) {
+						lines = [];
+					}
+					
 					const nonEmptyLines = lines.filter(l => l.trim()).length;
 					const commandCount = lines.filter(l => l.startsWith('$') || l.startsWith('>')).length;
 					const errorCount = lines.filter(l => /error|exception|failed/i.test(l)).length;
@@ -596,7 +633,7 @@ export class TmuxAgentMonitor implements INodeType {
 						activityLevel: nonEmptyLines,
 						commandsExecuted: commandCount,
 						errorsDetected: errorCount,
-						lastActivity: lines.slice(-5).join('\n'),
+						lastActivity: lines.length > 0 ? lines.slice(-5).join('\n') : 'No activity available',
 					});
 				}
 
@@ -670,15 +707,29 @@ export class TmuxAgentMonitor implements INodeType {
 						100
 					);
 
-					const lines = content.split('\n');
-					const recentLines = lines.slice(-50).join(' ').toLowerCase();
+					// Safely process the captured content with type checking
+					let lines: string[] = [];
+					let recentLines = '';
+					
+					try {
+						if (typeof content === 'string' && content.length > 0) {
+							lines = content.split('\n');
+							recentLines = lines.slice(-50).join(' ').toLowerCase();
+						} else if (content) {
+							lines = [];
+							recentLines = `subagent opportunity data in unexpected format: ${typeof content}`.toLowerCase();
+						}
+					} catch (error) {
+						lines = [];
+						recentLines = `error processing subagent opportunity data: ${error.message}`.toLowerCase();
+					}
 					
 					// Check for subagent opportunity indicators
 					const foundKeywords = subagentKeywords.filter(kw => recentLines.includes(kw));
 					
 					// Check for signs of being stuck (repetitive output)
-					const uniqueLines = new Set(lines.slice(-20).filter(l => l.trim()));
-					const isRepetitive = uniqueLines.size < 5;
+					const uniqueLines = new Set(lines.length > 0 ? lines.slice(-20).filter(l => l.trim()) : []);
+					const isRepetitive = lines.length > 0 && uniqueLines.size < 5;
 					
 					// Check for long-running tasks (lots of output without completion)
 					const hasLongRunning = lines.length > 80 && !recentLines.includes('complete') && !recentLines.includes('done');

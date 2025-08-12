@@ -1,6 +1,6 @@
 {
   "name": "@sirmrmarty/n8n-nodes-tmux-orchestrator",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "n8n nodes for orchestrating Claude AI agents through tmux sessions",
   "keywords": [
     "n8n-community-node-package",
@@ -11,14 +11,14 @@
     "automation"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/sirmrmarty/n8n-nodes-tmux-orchestrator",
+  "homepage": "https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode",
   "author": {
     "name": "sirmrmarty"
 
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sirmrmarty/n8n-nodes-tmux-orchestrator.git"
+    "url": "https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode.git"
   },
   "engines": {
     "node": ">=20.15"

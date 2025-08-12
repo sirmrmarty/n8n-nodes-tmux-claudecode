@@ -407,17 +407,41 @@ Please acknowledge receipt and provide ETA.`;
             for (const window of projectSessionData.windows) {
                 if (window.windowIndex > 0) {
                     const windowOutput = await bridge.captureWindowContent(projectSession, window.windowIndex, 50);
+                    let lastActivity;
+                    try {
+                        if (typeof windowOutput === 'string' && windowOutput.length > 0) {
+                            lastActivity = windowOutput.split('\n').slice(-10).join('\n');
+                        }
+                        else {
+                            lastActivity = windowOutput ? `Window activity in unexpected format: ${typeof windowOutput}` : 'No activity available';
+                        }
+                    }
+                    catch (error) {
+                        lastActivity = `Error processing window activity: ${error.message}`;
+                    }
                     teamStatus.push({
                         window: window.windowName,
                         index: window.windowIndex,
-                        lastActivity: windowOutput.split('\n').slice(-10).join('\n'),
+                        lastActivity,
                     });
                 }
+            }
+            let pmStatus;
+            try {
+                if (typeof pmOutput === 'string' && pmOutput.length > 0) {
+                    pmStatus = pmOutput.split('\n').slice(-30).join('\n');
+                }
+                else {
+                    pmStatus = pmOutput ? `PM status in unexpected format: ${typeof pmOutput}` : 'No PM status available';
+                }
+            }
+            catch (error) {
+                pmStatus = `Error processing PM status: ${error.message}`;
             }
             return {
                 success: true,
                 projectSession,
-                pmStatus: pmOutput.split('\n').slice(-30).join('\n'),
+                pmStatus,
                 teamStatus,
                 windowCount: projectSessionData.windows.length,
                 timestamp: new Date().toISOString(),
@@ -439,13 +463,25 @@ ${validationChecklist}
 Report any issues found and overall quality score.`);
             await new Promise(resolve => setTimeout(resolve, 5000));
             const validationOutput = await bridge.captureWindowContent(projectSession, 0, 100);
+            let pmResponse;
+            try {
+                if (typeof validationOutput === 'string' && validationOutput.length > 0) {
+                    pmResponse = validationOutput.split('\n').slice(-50).join('\n');
+                }
+                else {
+                    pmResponse = validationOutput ? `Validation response in unexpected format: ${typeof validationOutput}` : 'No validation response available';
+                }
+            }
+            catch (error) {
+                pmResponse = `Error processing validation response: ${error.message}`;
+            }
             return {
                 success: true,
                 projectSession,
                 validationType,
                 validationRequested: true,
                 checklist: validationChecklist,
-                pmResponse: validationOutput.split('\n').slice(-50).join('\n'),
+                pmResponse,
                 timestamp: new Date().toISOString(),
             };
         }
@@ -503,13 +539,28 @@ Report any issues found and overall quality score.`);
             await new Promise(resolve => setTimeout(resolve, 5000));
             for (const window of projectSessionData.windows) {
                 const output = await bridge.captureWindowContent(projectSession, window.windowIndex, 50);
+                let status;
+                try {
+                    if (typeof output === 'string' && output.length > 0) {
+                        status = output.split('\n').slice(-20).join('\n');
+                    }
+                    else {
+                        status = output ? `Standup status in unexpected format: ${typeof output}` : 'No standup response available';
+                    }
+                }
+                catch (error) {
+                    status = `Error processing standup status: ${error.message}`;
+                }
                 standupResults.push({
                     window: window.windowName,
                     index: window.windowIndex,
-                    status: output.split('\n').slice(-20).join('\n'),
+                    status,
                 });
             }
-            const summary = standupResults.map(r => `${r.window}: ${r.status.split('\n').slice(-5).join(' ')}`).join('\n\n');
+            const summary = standupResults.map(r => {
+                const statusText = typeof r.status === 'string' ? r.status : String(r.status || 'No status');
+                return `${r.window}: ${statusText.split('\n').slice(-5).join(' ')}`;
+            }).join('\n\n');
             await bridge.sendClaudeMessage(`${projectSession}:0`, `STANDUP SUMMARY:\n${summary}\n\nPlease review and address any blockers.`);
             return {
                 success: true,

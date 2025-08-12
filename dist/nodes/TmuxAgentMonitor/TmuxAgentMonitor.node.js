@@ -315,7 +315,18 @@ class TmuxAgentMonitor {
             for (const session of sessionsToCheck) {
                 for (const window of session.windows) {
                     const output = await bridge.captureWindowContent(session.name, window.windowIndex, 20);
-                    const lastLines = output.split('\n').slice(-10).join('\n');
+                    let lastLines;
+                    try {
+                        if (typeof output === 'string' && output.length > 0) {
+                            lastLines = output.split('\n').slice(-10).join('\n');
+                        }
+                        else {
+                            lastLines = output ? `Health data in unexpected format: ${typeof output}` : 'No health data available';
+                        }
+                    }
+                    catch (error) {
+                        lastLines = `Error processing health data: ${error.message}`;
+                    }
                     const isHealthy = lastLines.includes('ACK') || lastLines.includes('operational');
                     const hasErrors = /error|exception|failed/i.test(lastLines);
                     healthResults.push({
@@ -412,8 +423,22 @@ class TmuxAgentMonitor {
             for (const session of sessionsToCheck) {
                 for (const window of session.windows) {
                     const content = await bridge.captureWindowContent(session.name, window.windowIndex, 100);
-                    const lines = content.split('\n');
-                    const recentLines = lines.slice(-20);
+                    let lines = [];
+                    let recentLines = [];
+                    try {
+                        if (typeof content === 'string' && content.length > 0) {
+                            lines = content.split('\n');
+                            recentLines = lines.slice(-20);
+                        }
+                        else if (content) {
+                            lines = [];
+                            recentLines = [];
+                        }
+                    }
+                    catch (error) {
+                        lines = [];
+                        recentLines = [];
+                    }
                     const foundKeywords = [];
                     for (const keyword of keywords) {
                         if (recentLines.some(line => line.toLowerCase().includes(keyword.toLowerCase()))) {
@@ -434,7 +459,7 @@ class TmuxAgentMonitor {
                             foundKeywords,
                             isRepetitive,
                             waitingForInput,
-                            context: recentLines.slice(-10).join('\n'),
+                            context: recentLines.length > 0 ? recentLines.slice(-10).join('\n') : 'No context available',
                             suggestedAction: this.getSuggestedAction(foundKeywords, isRepetitive, waitingForInput),
                         });
                     }
@@ -507,7 +532,18 @@ class TmuxAgentMonitor {
                 };
                 for (const window of session.windows) {
                     const content = await bridge.captureWindowContent(session.name, window.windowIndex, 200);
-                    const lines = content.split('\n');
+                    let lines = [];
+                    try {
+                        if (typeof content === 'string' && content.length > 0) {
+                            lines = content.split('\n');
+                        }
+                        else if (content) {
+                            lines = [];
+                        }
+                    }
+                    catch (error) {
+                        lines = [];
+                    }
                     const nonEmptyLines = lines.filter(l => l.trim()).length;
                     const commandCount = lines.filter(l => l.startsWith('$') || l.startsWith('>')).length;
                     const errorCount = lines.filter(l => /error|exception|failed/i.test(l)).length;
@@ -518,7 +554,7 @@ class TmuxAgentMonitor {
                         activityLevel: nonEmptyLines,
                         commandsExecuted: commandCount,
                         errorsDetected: errorCount,
-                        lastActivity: lines.slice(-5).join('\n'),
+                        lastActivity: lines.length > 0 ? lines.slice(-5).join('\n') : 'No activity available',
                     });
                 }
                 activityData.push(sessionActivity);
@@ -573,11 +609,25 @@ class TmuxAgentMonitor {
             for (const session of sessionsToCheck) {
                 for (const window of session.windows) {
                     const content = await bridge.captureWindowContent(session.name, window.windowIndex, 100);
-                    const lines = content.split('\n');
-                    const recentLines = lines.slice(-50).join(' ').toLowerCase();
+                    let lines = [];
+                    let recentLines = '';
+                    try {
+                        if (typeof content === 'string' && content.length > 0) {
+                            lines = content.split('\n');
+                            recentLines = lines.slice(-50).join(' ').toLowerCase();
+                        }
+                        else if (content) {
+                            lines = [];
+                            recentLines = `subagent opportunity data in unexpected format: ${typeof content}`.toLowerCase();
+                        }
+                    }
+                    catch (error) {
+                        lines = [];
+                        recentLines = `error processing subagent opportunity data: ${error.message}`.toLowerCase();
+                    }
                     const foundKeywords = subagentKeywords.filter(kw => recentLines.includes(kw));
-                    const uniqueLines = new Set(lines.slice(-20).filter(l => l.trim()));
-                    const isRepetitive = uniqueLines.size < 5;
+                    const uniqueLines = new Set(lines.length > 0 ? lines.slice(-20).filter(l => l.trim()) : []);
+                    const isRepetitive = lines.length > 0 && uniqueLines.size < 5;
                     const hasLongRunning = lines.length > 80 && !recentLines.includes('complete') && !recentLines.includes('done');
                     let agentType = 'general';
                     if (window.windowName.toLowerCase().includes('manager')) {

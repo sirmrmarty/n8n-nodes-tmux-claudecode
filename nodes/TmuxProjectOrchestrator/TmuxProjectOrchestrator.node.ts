@@ -486,6 +486,22 @@ export class TmuxProjectOrchestrator implements INodeType {
 			// Set up git hooks for QA validation
 			await this.setupQAGitHooks(projectPath, projectName);
 
+			// Safely process the generated plan with type checking
+			let planSummary: string;
+			try {
+				if (typeof generatedPlan === 'string' && generatedPlan.length > 0) {
+					// Extract last 50 lines as summary
+					planSummary = generatedPlan.split('\n').slice(-50).join('\n');
+				} else if (generatedPlan) {
+					// Handle non-string content (should be rare after bridge fix)
+					planSummary = `Plan generated but in unexpected format: ${typeof generatedPlan}`;
+				} else {
+					planSummary = 'Plan generation completed but no content captured. Check Project Manager window for details.';
+				}
+			} catch (error) {
+				planSummary = `Error processing generated plan: ${error.message}. Raw plan available in Project Manager window.`;
+			}
+
 			// Create project state file
 			const projectState = {
 				name: projectName,
@@ -493,7 +509,7 @@ export class TmuxProjectOrchestrator implements INodeType {
 				qualityRequirements,
 				created: new Date().toISOString(),
 				status: 'planning',
-				plan: generatedPlan,
+				plan: generatedPlan || 'Plan generation in progress',
 				qaApprovalRequired: true,
 				commitBlocked: true,
 			};
@@ -508,7 +524,7 @@ export class TmuxProjectOrchestrator implements INodeType {
 				sessionCreated: projectName,
 				windows,
 				qualityRequirements,
-				generatedPlan: generatedPlan.split('\n').slice(-50).join('\n'), // Last 50 lines
+				generatedPlan: planSummary,
 				status: 'Plan generated - awaiting approval',
 				nextStep: 'Review the generated plan and use "Approve Plan" operation to proceed',
 				qaIntegrated: true,
@@ -747,11 +763,24 @@ exit 0`;
 			const teamStatus = [];
 			for (const window of session.windows) {
 				const output = await bridge.captureWindowContent(sessionName, window.windowIndex, 50);
+				
+				// Safely process the captured output with type checking
+				let statusText: string;
+				try {
+					if (typeof output === 'string' && output.length > 0) {
+						statusText = output.split('\n').slice(-20).join('\n');
+					} else {
+						statusText = output ? `Status data in unexpected format: ${typeof output}` : 'No status available';
+					}
+				} catch (error) {
+					statusText = `Error processing status: ${error.message}`;
+				}
+				
 				teamStatus.push({
 					window: window.windowName,
 					index: window.windowIndex,
 					role: this.identifyAgentRole(window.windowName),
-					status: output.split('\n').slice(-20).join('\n'),
+					status: statusText,
 					active: window.active,
 				});
 			}
@@ -794,9 +823,25 @@ exit 0`;
 			const detailedActivities = [];
 			for (const window of session.windows) {
 				const content = await bridge.captureWindowContent(sessionName, window.windowIndex, 200);
-				const lines = content.split('\n');
 				
-				// Analyze activity patterns
+				// Safely process the captured content with type checking
+				let lines: string[] = [];
+				let lastActivity = 'No activity captured';
+				
+				try {
+					if (typeof content === 'string' && content.length > 0) {
+						lines = content.split('\n');
+						lastActivity = lines.slice(-10).join('\n');
+					} else if (content) {
+						lines = []; // Empty array for non-string content
+						lastActivity = `Activity data in unexpected format: ${typeof content}`;
+					}
+				} catch (error) {
+					lines = [];
+					lastActivity = `Error processing activity: ${error.message}`;
+				}
+				
+				// Analyze activity patterns (safely)
 				const commandCount = lines.filter(l => l.startsWith('$') || l.startsWith('>')).length;
 				const errorCount = lines.filter(l => /error|exception|failed/i.test(l)).length;
 				const testResults = this.extractTestResults(lines);
@@ -810,7 +855,7 @@ exit 0`;
 					errorsDetected: errorCount,
 					testResults,
 					gitActivity: commitActivity,
-					lastActivity: lines.slice(-10).join('\n'),
+					lastActivity,
 					productivity: this.calculateProductivity(lines),
 				});
 			}
@@ -1095,13 +1140,25 @@ You will need to validate their code changes before git commits.`);
 				`TEAM UPDATE: ${targetWindow.windowName} (Window ${windowIndex}) has been removed from the project.
 Please redistribute any pending tasks to remaining team members.`);
 
+			// Safely process final status with type checking
+			let statusSummary: string;
+			try {
+				if (typeof finalStatus === 'string' && finalStatus.length > 0) {
+					statusSummary = finalStatus.split('\n').slice(-10).join('\n');
+				} else {
+					statusSummary = finalStatus ? `Final status in unexpected format: ${typeof finalStatus}` : 'No final status captured';
+				}
+			} catch (error) {
+				statusSummary = `Error processing final status: ${error.message}`;
+			}
+
 			return {
 				success: true,
 				sessionName,
 				action: 'remove',
 				removedWindow: targetWindow.windowName,
 				windowIndex,
-				finalStatus: finalStatus.split('\n').slice(-10).join('\n'),
+				finalStatus: statusSummary,
 				message: `Team member removed successfully`,
 			};
 		} catch (error) {
@@ -1162,15 +1219,26 @@ Please respond promptly for team coordination.`
 			const standupResults = [];
 			for (const window of session.windows) {
 				const output = await bridge.captureWindowContent(sessionName, window.windowIndex, 100);
-				const recentLines = output.split('\n').slice(-30);
 				
-				// Extract standup response
-				const standupStart = recentLines.findIndex(line => 
-					line.includes('DAILY STANDUP') || line.includes('status update')
-				);
-				const standupResponse = standupStart >= 0 ? 
-					recentLines.slice(standupStart).join('\n') : 
-					recentLines.slice(-15).join('\n');
+				// Safely process the captured output with type checking
+				let standupResponse: string;
+				try {
+					if (typeof output === 'string' && output.length > 0) {
+						const recentLines = output.split('\n').slice(-30);
+						
+						// Extract standup response
+						const standupStart = recentLines.findIndex(line => 
+							line.includes('DAILY STANDUP') || line.includes('status update')
+						);
+						standupResponse = standupStart >= 0 ? 
+							recentLines.slice(standupStart).join('\n') : 
+							recentLines.slice(-15).join('\n');
+					} else {
+						standupResponse = output ? `Standup data in unexpected format: ${typeof output}` : 'No standup response captured';
+					}
+				} catch (error) {
+					standupResponse = `Error processing standup response: ${error.message}`;
+				}
 
 				standupResults.push({
 					agent: window.windowName,
@@ -1181,9 +1249,11 @@ Please respond promptly for team coordination.`
 			}
 
 			// Send summary to PM
-			const summary = standupResults.map(r => 
-				`${r.agent}: ${r.response.split('\n').slice(-5).join(' ')}`
-			).join('\n\n');
+			const summary = standupResults.map(r => {
+				// Extra safety: ensure response is string before processing
+				const responseText = typeof r.response === 'string' ? r.response : String(r.response || 'No response');
+				return `${r.agent}: ${responseText.split('\n').slice(-5).join(' ')}`;
+			}).join('\n\n');
 			
 			await bridge.sendClaudeMessage(`${sessionName}:0`, 
 				`📊 STANDUP SUMMARY:\n${summary}\n\nPlease review team status and coordinate any necessary actions. Pay special attention to QA workload and any blocked members.`);
