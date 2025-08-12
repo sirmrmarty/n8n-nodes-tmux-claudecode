@@ -6,7 +6,7 @@ import type {
 export class TmuxOrchestratorApi implements ICredentialType {
 	name = 'tmuxOrchestratorApi';
 	displayName = 'Tmux Orchestrator Configuration';
-	documentationUrl = 'https://github.com/marwim/n8n-nodes-tmux-orchestrator';
+	documentationUrl = 'https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode';
 	properties: INodeProperties[] = [
 		{
 			displayName: 'Configuration Name',
