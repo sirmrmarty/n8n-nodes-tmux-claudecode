@@ -33,11 +33,14 @@ export declare class TmuxBridge {
     private workflowOrchestrator;
     private sessionsCache;
     private windowContentCache;
+    private pythonPool;
+    private poolConfig;
     private performanceMonitor;
     private debouncedCapture;
     private throttledStatus;
     constructor(config?: TmuxBridgeConfig);
     private executePython;
+    private executePythonDirect;
     getTmuxSessions(): Promise<TmuxSession[]>;
     captureWindowContent(sessionName: string, windowIndex: number, numLines?: number): Promise<string>;
     private captureWindowContentDirect;
@@ -46,6 +49,9 @@ export declare class TmuxBridge {
     sendCommandToWindow(sessionName: string, windowIndex: number, command: string): Promise<boolean>;
     getAllWindowsStatus(): Promise<any>;
     private getAllWindowsStatusDirect;
+    private analyzeTeamCoordination;
+    private analyzeProjectSession;
+    private calculateOverallTeamHealth;
     findWindowByName(windowName: string): Promise<Array<[string, number]>>;
     createMonitoringSnapshot(): Promise<string>;
     sendClaudeMessage(target: string, message: string): Promise<boolean>;
@@ -67,8 +73,8 @@ export declare class TmuxBridge {
         auditHash?: string;
     }>;
     requestQAValidation(projectName: string, testTypes: string[], context?: string): Promise<boolean>;
-    createQAApproval(projectName: string, commitHash: string, commitMessage: string, qaEngineerID: string, privateKeyHex: string, testResults: QATestResults, correlationId?: string): Promise<CryptoQAApproval>;
-    createQABlock(projectName: string, commitHash: string, commitMessage: string, qaEngineerID: string, blockReason: string, testResults: QATestResults, privateKeyHex: string): Promise<any>;
+    createQAApproval(projectName: string, commitHash: string, commitMessage: string, qaEngineerID: string, privateKey: string, testResults: QATestResults, correlationId?: string): Promise<CryptoQAApproval>;
+    createQABlock(projectName: string, commitHash: string, commitMessage: string, qaEngineerID: string, blockReason: string, testResults: QATestResults, privateKey: string): Promise<any>;
     getQAStatus(projectName: string, commitHash: string): Promise<{
         status: string;
         details?: any;
@@ -117,6 +123,7 @@ export declare class TmuxBridge {
                 overallHitRate: number;
             };
         };
+        pythonPool: import("./pythonProcessPool").PoolMetrics;
         qaSystem: {
             activeApprovals: number;
             activeBlocks: number;
@@ -131,4 +138,8 @@ export declare class TmuxBridge {
         issues: string[];
         recommendations: string[];
     };
+    private validateDependencies;
+    getDiagnosticInfo(): Record<string, any>;
+    private checkCommand;
+    cleanup(): Promise<void>;
 }

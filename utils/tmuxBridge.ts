@@ -1,12 +1,14 @@
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import { promisify } from 'util';
 import { randomBytes } from 'crypto';
 import { PathResolver } from './paths';
 import { SecureCommandExecutor, secureTmux, secureGit, secureExec } from './secureExecution';
 import { CryptographicQASystem, QAApprovalData, QATestResults, CryptoQAApproval } from './cryptoQA';
 import { qaEventBus, QAEventType, QAEvent, QAWorkflowOrchestrator } from './qaEvents';
 import { PerformanceCache, ConnectionPool, PerformanceMonitor, debounce, throttle } from './performanceOptimizations';
+import { PythonProcessPool, PythonPoolConfig } from './pythonProcessPool';
 
 export interface TmuxSession {
 	name: string;
@@ -48,6 +50,8 @@ export class TmuxBridge {
 	// Performance optimization components
 	private sessionsCache: PerformanceCache<TmuxSession[]>;
 	private windowContentCache: PerformanceCache<string>;
+	private pythonPool: PythonProcessPool;
+	private poolConfig: PythonPoolConfig;
 	private performanceMonitor: PerformanceMonitor;
 	private debouncedCapture: (sessionName: string, windowIndex: number, numLines?: number) => Promise<string>;
 	private throttledStatus: () => Promise<any>;
@@ -74,14 +78,73 @@ export class TmuxBridge {
 		this.debouncedCapture = debounce(this.captureWindowContentDirect.bind(this), 100);
 		this.throttledStatus = throttle(this.getAllWindowsStatusDirect.bind(this), 1000);
 		
-		// Resolve the path to the tmux_utils.py script
-		this.pythonScriptPath = this.pathResolver.getScriptPath('tmux_utils.py', config?.externalScriptsDir);
+		// Validate dependencies and resolve script path
+		try {
+			this.validateDependencies();
+			this.pythonScriptPath = this.pathResolver.getScriptPath('tmux_wrapper.py', config?.externalScriptsDir);
+		} catch (error) {
+			// Log error but don't fail constructor - allow graceful degradation
+			console.warn('TmuxBridge initialization warning:', error.message);
+			// Use fallback path for graceful degradation
+			this.pythonScriptPath = path.join(__dirname, 'tmux_wrapper.py');
+		}
+		
+		// Initialize Python process pool for performance optimization
+		this.poolConfig = {
+			maxProcesses: 6,
+			minProcesses: 2,
+			idleTimeout: 60000, // 1 minute
+			requestTimeout: 30000, // 30 seconds
+			maxErrorCount: 5,
+			healthCheckInterval: 30000, // 30 seconds
+			processRespawnDelay: 1000, // 1 second
+		};
+		
+		try {
+			this.pythonPool = new PythonProcessPool(this.pythonScriptPath, this.poolConfig);
+		} catch (error) {
+			console.warn('Python process pool initialization failed:', error.message);
+			// Set to null to indicate pool is not available
+			this.pythonPool = null as any;
+		}
 	}
 
 	/**
-	 * Execute Python script and return JSON result
+	 * Execute Python script using connection pool for performance optimization
 	 */
 	private async executePython(method: string, args: any[] = []): Promise<any> {
+		const startTime = Date.now();
+		
+		try {
+			// Check if Python pool is available
+			if (!this.pythonPool) {
+				console.warn('Python process pool not available, falling back to direct execution');
+				return this.executePythonDirect(method, args);
+			}
+
+			// Use the Python process pool for efficient execution
+			const result = await this.pythonPool.execute(method, args);
+			
+			// Record performance metrics
+			const duration = Date.now() - startTime;
+			this.performanceMonitor.recordExecutionTime(duration);
+			
+			return result;
+		} catch (error) {
+			// Record failed execution
+			const duration = Date.now() - startTime;
+			this.performanceMonitor.recordExecutionTime(duration);
+			
+			// Fall back to direct execution if pool fails
+			console.warn('Python pool execution failed, falling back to direct execution:', error.message);
+			return this.executePythonDirect(method, args);
+		}
+	}
+
+	/**
+	 * Fallback direct execution method for compatibility and error recovery
+	 */
+	private async executePythonDirect(method: string, args: any[] = []): Promise<any> {
 		return new Promise((resolve, reject) => {
 			const pythonArgs = [this.pythonScriptPath, method, ...args.map(arg => JSON.stringify(arg))];
 			const python = spawn('python3', pythonArgs);
@@ -126,14 +189,17 @@ export class TmuxBridge {
 			if (cached) {
 				const duration = Date.now() - startTime;
 				this.performanceMonitor.recordExecutionTime(duration);
-				return cached;
+				return Array.isArray(cached) ? cached : [];
 			}
 
 			// Fetch from system
 			const result = await this.executePython('get_tmux_sessions');
 			
+			// Ensure result is an array
+			const sessionsArray = Array.isArray(result) ? result : [];
+			
 			// Cache the result
-			this.sessionsCache.set(cacheKey, result);
+			this.sessionsCache.set(cacheKey, sessionsArray);
 			
 			const duration = Date.now() - startTime;
 			this.performanceMonitor.recordExecutionTime(duration);
@@ -142,7 +208,7 @@ export class TmuxBridge {
 			const cacheMetrics = this.sessionsCache.getMetrics();
 			this.performanceMonitor.updateCacheMetrics(cacheMetrics.hits, cacheMetrics.misses);
 			
-			return result;
+			return sessionsArray;
 		} catch (error) {
 			console.error('Error getting tmux sessions:', error);
 			const duration = Date.now() - startTime;
@@ -275,10 +341,163 @@ export class TmuxBridge {
 	private async getAllWindowsStatusDirect(): Promise<any> {
 		try {
 			const result = await this.executePython('get_all_windows_status');
+			
+			// Enhance result with coordination analysis
+			if (result && result.sessions) {
+				const enhancedResult = await this.analyzeTeamCoordination(result);
+				return enhancedResult;
+			}
+			
 			return result;
 		} catch (error) {
 			throw new Error(`Failed to get windows status: ${error.message}`);
 		}
+	}
+
+	/**
+	 * Analyze team coordination and provide recommendations
+	 */
+	private async analyzeTeamCoordination(rawStatus: any): Promise<any> {
+		try {
+			const analysis = {
+				...rawStatus,
+				coordinationAnalysis: {
+					timestamp: new Date().toISOString(),
+					teamHealth: 'unknown',
+					communicationIssues: [] as string[],
+					recommendations: [] as string[],
+					blockers: [] as string[]
+				}
+			};
+
+			for (const session of rawStatus.sessions || []) {
+				const projectAnalysis = this.analyzeProjectSession(session);
+				
+				// Add project-specific analysis
+				session.projectHealth = projectAnalysis.health;
+				session.teamCoordination = projectAnalysis.coordination;
+				session.qaStatus = projectAnalysis.qaStatus;
+				session.blockers = projectAnalysis.blockers;
+				
+				// Aggregate issues
+				analysis.coordinationAnalysis.communicationIssues.push(...projectAnalysis.issues);
+				analysis.coordinationAnalysis.recommendations.push(...projectAnalysis.recommendations);
+				analysis.coordinationAnalysis.blockers.push(...projectAnalysis.blockers);
+			}
+
+			// Determine overall team health
+			analysis.coordinationAnalysis.teamHealth = this.calculateOverallTeamHealth(rawStatus.sessions || []);
+			
+			return analysis;
+		} catch (error) {
+			console.warn('Failed to analyze team coordination:', error.message);
+			return rawStatus; // Return original data if analysis fails
+		}
+	}
+
+	/**
+	 * Analyze a single project session for coordination issues
+	 */
+	private analyzeProjectSession(session: any): any {
+		const analysis = {
+			health: 'unknown',
+			coordination: 'unknown',
+			qaStatus: 'unknown',
+			issues: [] as string[],
+			recommendations: [] as string[],
+			blockers: [] as string[]
+		};
+
+		const windows = session.windows || [];
+		const pmWindow = windows.find((w: any) => w.index === 0);
+		const qaWindow = windows.find((w: any) => w.index === 1);
+		const devWindows = windows.filter((w: any) => w.index > 1);
+
+		// Analyze PM status
+		if (pmWindow?.info?.content) {
+			const pmContent = pmWindow.info.content.toLowerCase();
+			if (pmContent.includes('stalled') || pmContent.includes('blocked')) {
+				analysis.issues.push('Project Manager reporting stalled status');
+				analysis.blockers.push('PM coordination issues');
+			}
+			if (pmContent.includes('repeated status') || pmContent.includes('same as last')) {
+				analysis.issues.push('Project Manager stuck in status loop');
+				analysis.recommendations.push('PM needs fresh task assignment or unblocking');
+			}
+		}
+
+		// Analyze QA status
+		if (qaWindow?.info?.content) {
+			const qaContent = qaWindow.info.content.toLowerCase();
+			if (qaContent.includes('awaiting') || qaContent.includes('idle')) {
+				analysis.qaStatus = 'ready';
+			} else if (qaContent.includes('testing') || qaContent.includes('running')) {
+				analysis.qaStatus = 'active';
+			} else if (qaContent.includes('blocked') || qaContent.includes('error')) {
+				analysis.qaStatus = 'blocked';
+				analysis.blockers.push('QA system issues');
+			}
+		}
+
+		// Analyze developer windows
+		for (const devWindow of devWindows) {
+			if (devWindow?.info?.content) {
+				const devContent = devWindow.info.content;
+				// Look for command not found errors
+				if (devContent.includes('command not found')) {
+					analysis.issues.push(`Developer window ${devWindow.index}: Command recognition issues`);
+					analysis.recommendations.push('Initialize agent shells with proper command handling');
+				}
+			}
+		}
+
+		// Determine coordination status
+		if (analysis.qaStatus === 'ready' && analysis.issues.some(i => i.includes('PM'))) {
+			analysis.coordination = 'miscommunication';
+			analysis.recommendations.push('PM should coordinate with ready QA team');
+		} else if (analysis.issues.length === 0) {
+			analysis.coordination = 'good';
+		} else {
+			analysis.coordination = 'needs-attention';
+		}
+
+		// Overall health assessment
+		if (analysis.blockers.length > 0) {
+			analysis.health = 'critical';
+		} else if (analysis.issues.length > 2) {
+			analysis.health = 'poor';
+		} else if (analysis.issues.length > 0) {
+			analysis.health = 'fair';
+		} else {
+			analysis.health = 'good';
+		}
+
+		return analysis;
+	}
+
+	/**
+	 * Calculate overall team health across all sessions
+	 */
+	private calculateOverallTeamHealth(sessions: any[]): string {
+		if (sessions.length === 0) return 'unknown';
+		
+		const healthScores = sessions.map(session => {
+			switch (session.projectHealth) {
+				case 'good': return 4;
+				case 'fair': return 3;
+				case 'poor': return 2;
+				case 'critical': return 1;
+				default: return 0;
+			}
+		});
+		
+		const avgScore = healthScores.reduce((a, b) => a + b, 0) / healthScores.length;
+		
+		if (avgScore >= 3.5) return 'excellent';
+		if (avgScore >= 2.5) return 'good';
+		if (avgScore >= 1.5) return 'fair';
+		if (avgScore >= 0.5) return 'poor';
+		return 'critical';
 	}
 
 	/**
@@ -641,9 +860,16 @@ Deploy with: Task tool with prompt='[your task]' and subagent_type='[agent-type]
 			// Register the public key
 			await this.registerQAEngineer(qaEngineerID, keyPair.publicKeyHex);
 			
+			// For backward compatibility, convert to hex strings
+			// Use the secure callback pattern to access the key
+			const privateKeyHex = await keyPair.privateKey.useAsync(async (keyData) => {
+				return Buffer.from(keyData).toString('hex');
+			});
+			const publicKeyHex = keyPair.publicKeyHex;
+			
 			return {
-				privateKey: keyPair.privateKeyHex,
-				publicKey: keyPair.publicKeyHex,
+				privateKey: privateKeyHex,
+				publicKey: publicKeyHex,
 				qaEngineerID
 			};
 		} catch (error) {
@@ -743,7 +969,7 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 		commitHash: string,
 		commitMessage: string, 
 		qaEngineerID: string,
-		privateKeyHex: string,
+		privateKey: string,
 		testResults: QATestResults,
 		correlationId?: string
 	): Promise<CryptoQAApproval> {
@@ -763,7 +989,7 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 			if (!qaEngineerID || typeof qaEngineerID !== 'string') {
 				throw new Error('Invalid QA Engineer ID');
 			}
-			if (!privateKeyHex || !/^[a-fA-F0-9]{64}$/.test(privateKeyHex)) {
+			if (!privateKey || !/^[a-fA-F0-9]{64}$/.test(privateKey)) {
 				throw new Error('Invalid private key format');
 			}
 
@@ -779,7 +1005,8 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 			};
 
 			// Create cryptographically signed approval
-			const approval = await CryptographicQASystem.createQAApproval(approvalData, privateKeyHex);
+			// Use legacy method for now until full migration to SecurePrivateKey
+			const approval = await CryptographicQASystem.createQAApprovalLegacy(approvalData, privateKey);
 
 			// Store in secure cache
 			const approvalKey = `${projectName}:${commitHash}`;
@@ -833,7 +1060,7 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 		qaEngineerID: string,
 		blockReason: string,
 		testResults: QATestResults,
-		privateKeyHex: string
+		privateKey: string
 	): Promise<any> {
 		try {
 			// Validate inputs
@@ -852,19 +1079,20 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 			if (!blockReason || typeof blockReason !== 'string') {
 				throw new Error('Invalid block reason');
 			}
-			if (!privateKeyHex || !/^[a-fA-F0-9]{64}$/.test(privateKeyHex)) {
+			if (!privateKey || !/^[a-fA-F0-9]{64}$/.test(privateKey)) {
 				throw new Error('Invalid private key format');
 			}
 
 			// Create cryptographically signed block
-			const block = await CryptographicQASystem.createQABlock(
+			// Use legacy method for backward compatibility
+			const block = await CryptographicQASystem.createQABlockLegacy(
 				projectName,
 				commitHash,
 				commitMessage,
 				qaEngineerID,
 				blockReason,
 				testResults,
-				privateKeyHex
+				privateKey
 			);
 
 			// Store in secure cache
@@ -1305,6 +1533,7 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 		const sessionsCacheMetrics = this.sessionsCache.getMetrics();
 		const windowContentCacheMetrics = this.windowContentCache.getMetrics();
 		const monitorMetrics = this.performanceMonitor.getDetailedStats();
+		const poolMetrics = this.pythonPool.getMetrics();
 
 		return {
 			monitor: monitorMetrics,
@@ -1321,6 +1550,7 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 					)
 				}
 			},
+			pythonPool: poolMetrics,
 			qaSystem: {
 				activeApprovals: this.approvalCache.size,
 				activeBlocks: this.blockCache.size
@@ -1413,5 +1643,95 @@ Use "Approve for Commit" or "Block Commit" operations based on results.`;
 		}
 
 		return health;
+	}
+
+	/**
+	 * Validate system dependencies are available
+	 */
+	private validateDependencies(): void {
+		// Check for tmux
+		try {
+			require('child_process').execSync('tmux -V', { stdio: 'ignore' });
+		} catch (error) {
+			throw new Error('tmux is not installed or not available in PATH. Please install tmux first.');
+		}
+
+		// Check for python3
+		try {
+			require('child_process').execSync('python3 --version', { stdio: 'ignore' });
+		} catch (error) {
+			throw new Error('python3 is not installed or not available in PATH. Please install Python 3 first.');
+		}
+
+		// Validate script paths are accessible
+		const requiredScripts = ['tmux_wrapper.py'];
+		for (const scriptName of requiredScripts) {
+			try {
+				const scriptPath = this.pathResolver.getScriptPath(scriptName, this.config.externalScriptsDir);
+				if (!this.pathResolver.isScriptAvailable(scriptPath)) {
+					throw new Error(`Script ${scriptName} found at ${scriptPath} but is not executable. Please check permissions.`);
+				}
+			} catch (error) {
+				throw new Error(`Required script ${scriptName} not found: ${error.message}`);
+			}
+		}
+	}
+
+	/**
+	 * Get diagnostic information about the system state
+	 */
+	getDiagnosticInfo(): Record<string, any> {
+		const scriptPaths = this.pathResolver.getAllScriptPaths(this.config.externalScriptsDir);
+		
+		return {
+			pythonScriptPath: this.pythonScriptPath,
+			scriptPaths,
+			dependencies: {
+				tmux: this.checkCommand('tmux -V'),
+				python3: this.checkCommand('python3 --version'),
+			},
+			config: this.config,
+			performance: this.getPerformanceMetrics(),
+			systemHealth: this.getSystemHealth()
+		};
+	}
+
+	/**
+	 * Check if a command is available
+	 */
+	private checkCommand(command: string): { available: boolean; version?: string; error?: string } {
+		try {
+			const result = require('child_process').execSync(command, { 
+				stdio: 'pipe', 
+				encoding: 'utf8',
+				timeout: 5000 
+			});
+			return { 
+				available: true, 
+				version: result.toString().trim() 
+			};
+		} catch (error) {
+			return { 
+				available: false, 
+				error: error.message 
+			};
+		}
+	}
+
+	/**
+	 * Clean up resources on shutdown
+	 */
+	async cleanup(): Promise<void> {
+		// Destroy Python process pool
+		if (this.pythonPool) {
+			await this.pythonPool.destroy();
+		}
+		
+		// Clear all caches
+		this.clearPerformanceCaches();
+		
+		// Clear approval and block caches
+		this.approvalCache.clear();
+		this.blockCache.clear();
 	}
 }

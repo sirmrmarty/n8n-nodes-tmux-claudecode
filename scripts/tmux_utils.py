@@ -243,6 +243,63 @@ class TmuxOrchestrator:
                 snapshot += "\n"
         
         return snapshot
+    
+    def handle_status_request(self, session_name: str, window_index: int, request: str) -> bool:
+        """Handle STATUS REQUEST commands by providing appropriate responses"""
+        try:
+            # Determine role based on window name/index
+            sessions = self.get_tmux_sessions()
+            session = next((s for s in sessions if s.name == session_name), None)
+            if not session:
+                return False
+                
+            window = next((w for w in session.windows if w.window_index == window_index), None)
+            if not window:
+                return False
+            
+            # Create status response based on window role
+            role = self._detect_window_role(window.window_name, window_index)
+            status_response = self._generate_status_response(role, session_name, window_index)
+            
+            # Send the status response to the window
+            target = f"{session_name}:{window_index}"
+            cmd = ["tmux", "send-keys", "-t", target, "C-c"]  # Cancel current input
+            subprocess.run(cmd, capture_output=True, text=True)
+            
+            # Send the actual status
+            cmd = ["tmux", "send-keys", "-t", target, f"echo '{status_response}'", "C-m"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"Error handling status request: {e}")
+            return False
+    
+    def _detect_window_role(self, window_name: str, window_index: int) -> str:
+        """Detect the role of a window based on its name and index"""
+        name_lower = window_name.lower()
+        
+        if 'project' in name_lower or 'manager' in name_lower or window_index == 0:
+            return 'project-manager'
+        elif 'qa' in name_lower or 'test' in name_lower or window_index == 1:
+            return 'qa-engineer'
+        elif 'dev' in name_lower or 'code' in name_lower or window_index == 2:
+            return 'developer'
+        else:
+            return 'developer'  # Default to developer
+    
+    def _generate_status_response(self, role: str, session_name: str, window_index: int) -> str:
+        """Generate appropriate status response based on role"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        if role == 'project-manager':
+            return f"[{timestamp}] PROJECT STATUS: Coordinating team activities. Monitoring QA and development progress. Ready to assist with project management tasks."
+        elif role == 'qa-engineer':
+            return f"[{timestamp}] QA STATUS: Systems operational. Ready to run tests and validate code quality. Awaiting code submissions for testing."
+        elif role == 'developer':
+            return f"[{timestamp}] DEVELOPER STATUS: Ready for development tasks. Environment configured. Awaiting project requirements or code assignments."
+        else:
+            return f"[{timestamp}] AGENT STATUS: Online and ready. Waiting for task assignments."
 
 if __name__ == "__main__":
     try:

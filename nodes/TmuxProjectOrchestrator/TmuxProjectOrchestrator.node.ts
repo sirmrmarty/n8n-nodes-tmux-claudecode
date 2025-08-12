@@ -5,13 +5,16 @@ import type {
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { NodeConnectionType, NodeOperationError } from 'n8n-workflow';
-import { execSync } from 'child_process';
+import { secureTmux, secureExec } from '../../utils/secureExecution';
 import { TmuxBridge, TmuxBridgeConfig } from '../../utils/tmuxBridge';
 import { PathResolver } from '../../utils/paths';
 import * as fs from 'fs';
 import * as path from 'path';
 
 export class TmuxProjectOrchestrator implements INodeType {
+	private pathResolver: PathResolver = new PathResolver();
+	private static staticPathResolver: PathResolver = new PathResolver();
+
 	description: INodeTypeDescription = {
 		displayName: 'Tmux Project Orchestrator',
 		name: 'tmuxProjectOrchestrator',
@@ -379,7 +382,6 @@ export class TmuxProjectOrchestrator implements INodeType {
 		
 		// Get credentials if available
 		let bridgeConfig: TmuxBridgeConfig = {};
-		const pathResolver = new PathResolver();
 		try {
 			const credentials = await this.getCredentials('tmuxOrchestratorApi');
 			if (credentials?.useExternalScripts && credentials?.scriptsDirectory) {
@@ -400,31 +402,31 @@ export class TmuxProjectOrchestrator implements INodeType {
 
 				switch (operation) {
 					case 'createProject':
-						result = await TmuxProjectOrchestrator.prototype.createProject(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleCreateProject(this, i, bridge);
 						break;
 					case 'approvePlan':
-						result = await TmuxProjectOrchestrator.prototype.approvePlan(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleApprovePlan(this, i, bridge);
 						break;
 					case 'getStatus':
-						result = await TmuxProjectOrchestrator.prototype.getStatus(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleGetStatus(this, i, bridge);
 						break;
 					case 'generateReport':
-						result = await TmuxProjectOrchestrator.prototype.generateReport(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleGenerateReport(this, i, bridge);
 						break;
 					case 'scheduleTask':
-						result = await TmuxProjectOrchestrator.prototype.scheduleTask(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleScheduleTask(this, i, bridge);
 						break;
 					case 'manageTeam':
-						result = await TmuxProjectOrchestrator.prototype.manageTeam(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleManageTeam(this, i, bridge);
 						break;
 					case 'runQATests':
-						result = await TmuxProjectOrchestrator.prototype.runQATests(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleRunQATests(this, i, bridge);
 						break;
 					case 'approveCommit':
-						result = await TmuxProjectOrchestrator.prototype.approveCommit(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleApproveCommit(this, i, bridge);
 						break;
 					case 'blockCommit':
-						result = await TmuxProjectOrchestrator.prototype.blockCommit(this, i, bridge);
+						result = await TmuxProjectOrchestrator.handleBlockCommit(this, i, bridge);
 						break;
 				}
 
@@ -449,7 +451,7 @@ export class TmuxProjectOrchestrator implements INodeType {
 		return [returnData];
 	}
 
-	private async createProject(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleCreateProject(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const projectIdea = context.getNodeParameter('projectIdea', itemIndex) as string;
 		const projectName = context.getNodeParameter('projectName', itemIndex) as string;
 		const projectPath = context.getNodeParameter('projectPath', itemIndex, '') as string;
@@ -457,17 +459,24 @@ export class TmuxProjectOrchestrator implements INodeType {
 
 		try {
 			// Define windows with mandatory QA engineer
-			const windows = this.getQAIntegratedWindows(qualityRequirements);
+			const windows = TmuxProjectOrchestrator.getQAIntegratedWindows(qualityRequirements);
 			
 			// Create the session with windows
 			await bridge.createSession(projectName, projectPath, windows);
 
 			// Deploy Project Manager with QA-aware briefing
-			execSync(`tmux send-keys -t ${projectName}:0 "claude" Enter`);
+			// Validate projectName to prevent injection
+			if (!projectName || typeof projectName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(projectName)) {
+				throw new Error('Invalid project name - must contain only letters, numbers, underscores, and hyphens');
+			}
+			const pmResult = await secureTmux('send-keys', ['-t', `${projectName}:0`, 'claude', 'Enter']);
+			if (!pmResult.success) {
+				throw new Error(`Failed to deploy Project Manager: ${pmResult.stderr}`);
+			}
 			await new Promise(resolve => setTimeout(resolve, 5000));
 
 			// Generate intelligent project plan using AI
-			const aiPrompt = this.generateAIProjectPrompt(projectIdea, qualityRequirements);
+			const aiPrompt = TmuxProjectOrchestrator.generateAIProjectPrompt(projectIdea, qualityRequirements);
 			await bridge.sendClaudeMessage(`${projectName}:0`, aiPrompt);
 
 			// Wait for AI to generate plan
@@ -477,14 +486,21 @@ export class TmuxProjectOrchestrator implements INodeType {
 			const generatedPlan = await bridge.captureWindowContent(projectName, 0, 200);
 
 			// Deploy QA Engineer (mandatory)
-			execSync(`tmux send-keys -t ${projectName}:1 "claude" Enter`);
+			// projectName already validated above
+			const qaResult = await secureTmux('send-keys', ['-t', `${projectName}:1`, 'claude', 'Enter']);
+			if (!qaResult.success) {
+				throw new Error(`Failed to deploy QA Engineer: ${qaResult.stderr}`);
+			}
 			await new Promise(resolve => setTimeout(resolve, 5000));
 
-			const qaBriefing = this.getQAEngineerBriefing(qualityRequirements);
+			const qaBriefing = TmuxProjectOrchestrator.getQAEngineerBriefing(qualityRequirements);
 			await bridge.sendClaudeMessage(`${projectName}:1`, qaBriefing);
 
+			// Initialize agent shells with proper command handling
+			await TmuxProjectOrchestrator.initializeAgentShells(projectName, windows, bridge);
+
 			// Set up git hooks for QA validation
-			await this.setupQAGitHooks(projectPath, projectName);
+			await TmuxProjectOrchestrator.setupQAGitHooks(projectPath, projectName);
 
 			// Safely process the generated plan with type checking
 			let planSummary: string;
@@ -514,8 +530,7 @@ export class TmuxProjectOrchestrator implements INodeType {
 				commitBlocked: true,
 			};
 
-			const stateFile = `/tmp/${projectName}_state.json`;
-			fs.writeFileSync(stateFile, JSON.stringify(projectState, null, 2));
+			const stateFile = TmuxProjectOrchestrator.safeTempFileWrite(projectName, 'state.json', JSON.stringify(projectState, null, 2));
 
 			return {
 				success: true,
@@ -536,7 +551,7 @@ export class TmuxProjectOrchestrator implements INodeType {
 		}
 	}
 
-	private async approvePlan(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleApprovePlan(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const planModifications = context.getNodeParameter('planModifications', itemIndex, '') as string;
 
@@ -604,7 +619,7 @@ Stay alert for development completion notifications.`);
 		}
 	}
 
-	private getQAIntegratedWindows(qualityLevel: string): string[] {
+	private static getQAIntegratedWindows(qualityLevel: string): string[] {
 		// Always include PM and QA Engineer
 		const baseWindows = ['Project-Manager', 'QA-Engineer'];
 		
@@ -620,7 +635,7 @@ Stay alert for development completion notifications.`);
 		}
 	}
 
-	private generateAIProjectPrompt(projectIdea: string, qualityLevel: string): string {
+	private static generateAIProjectPrompt(projectIdea: string, qualityLevel: string): string {
 		return `You are an expert Project Manager. Generate a comprehensive project plan for:
 
 PROJECT IDEA:
@@ -650,7 +665,7 @@ Focus on:
 Provide a actionable, comprehensive plan that can be executed immediately upon approval.`;
 	}
 
-	private getQAEngineerBriefing(qualityLevel: string): string {
+	private static getQAEngineerBriefing(qualityLevel: string): string {
 		const testRequirements = {
 			standard: 'Unit tests, Integration tests, Basic security checks',
 			high: 'Unit + Integration + Security scans + Performance testing',
@@ -685,15 +700,71 @@ COMMUNICATION:
 Remember: YOU are the gatekeeper for code quality. No compromises on quality standards.`;
 	}
 
-	private async setupQAGitHooks(projectPath: string, projectName: string): Promise<void> {
+	private static async initializeAgentShells(projectName: string, windows: string[], bridge: TmuxBridge): Promise<void> {
+		try {
+			// Source the agent aliases script in each window
+			const aliasesPath = path.resolve(__dirname, '../../utils/agent_aliases.sh');
+			
+			for (let i = 0; i < windows.length; i++) {
+				const windowName = windows[i];
+				
+				// Wait a bit for window to be ready
+				await new Promise(resolve => setTimeout(resolve, 2000));
+				
+				// Source the aliases script
+				await bridge.sendCommandToWindow(projectName, i, `source "${aliasesPath}"`);
+				
+				// Set appropriate AGENT_ROLE environment variable
+				let role = 'developer';
+				if (windowName.toLowerCase().includes('project') || windowName.toLowerCase().includes('manager') || i === 0) {
+					role = 'project-manager';
+				} else if (windowName.toLowerCase().includes('qa') || windowName.toLowerCase().includes('test') || i === 1) {
+					role = 'qa-engineer';
+				}
+				
+				await bridge.sendCommandToWindow(projectName, i, `export AGENT_ROLE="${role}"`);
+				
+				// Update PS1 to show role
+				await bridge.sendCommandToWindow(projectName, i, `export PS1="[${role}] \\u@\\h:\\w\\$ "`);
+				
+				// Clear screen and show welcome message
+				await bridge.sendCommandToWindow(projectName, i, 'clear');
+				await bridge.sendCommandToWindow(projectName, i, `echo "Agent shell initialized as: ${role}"`);
+				await bridge.sendCommandToWindow(projectName, i, 'echo "Available commands: STATUS, PROGRESS [%], BLOCKERS [description]"');
+			}
+		} catch (error) {
+			console.warn('Failed to initialize agent shells:', error.message);
+			// Continue anyway - this is not a critical failure
+		}
+	}
+
+	private static async setupQAGitHooks(projectPath: string, projectName: string): Promise<void> {
 		if (!projectPath || !fs.existsSync(projectPath)) {
 			return; // Skip if no valid project path
 		}
 
+		// Security: Validate project name to prevent injection attacks
+		if (!TmuxProjectOrchestrator.validateProjectName(projectName)) {
+			throw new Error('Invalid project name: contains dangerous characters');
+		}
+
 		try {
-			const gitHooksDir = path.join(projectPath, '.git', 'hooks');
+			// Security: Validate project path using PathResolver
+			const resolvedProjectPath = path.resolve(projectPath);
+			if (!TmuxProjectOrchestrator.validateProjectPath(resolvedProjectPath)) {
+				throw new Error('Invalid project path: directory traversal detected');
+			}
+
+			// Security: Use PathResolver to safely construct git hooks directory path
+			const gitHooksDir = TmuxProjectOrchestrator.staticPathResolver.validateAndResolvePath(resolvedProjectPath, '.git/hooks');
+			
 			if (!fs.existsSync(gitHooksDir)) {
-				return; // Not a git repository
+				return; // Not a git repository or hooks directory doesn't exist
+			}
+
+			// Security: Additional validation that gitHooksDir is within project bounds
+			if (!TmuxProjectOrchestrator.staticPathResolver.isPathSafe(gitHooksDir, resolvedProjectPath)) {
+				throw new Error('Git hooks directory path traversal detected');
 			}
 
 			const preCommitHook = `#!/bin/bash
@@ -716,9 +787,40 @@ echo "✅ QA Approved - Commit allowed"
 rm "\$QA_APPROVAL_FILE"  # Remove approval flag after use
 exit 0`;
 
-			const preCommitPath = path.join(gitHooksDir, 'pre-commit');
-			fs.writeFileSync(preCommitPath, preCommitHook);
-			execSync(`chmod +x "${preCommitPath}"`);
+			// Security: Use PathResolver to safely construct pre-commit hook path
+			const preCommitPath = TmuxProjectOrchestrator.staticPathResolver.validateAndResolvePath(gitHooksDir, 'pre-commit');
+			
+			// Security: Final validation that pre-commit path is within git hooks directory
+			if (!TmuxProjectOrchestrator.staticPathResolver.isPathSafe(preCommitPath, gitHooksDir)) {
+				throw new Error('Pre-commit hook path traversal detected');
+			}
+
+			// Security: Validate file doesn't already exist with dangerous content
+			if (fs.existsSync(preCommitPath)) {
+				const stats = fs.statSync(preCommitPath);
+				if (!stats.isFile()) {
+					throw new Error('Pre-commit hook path exists but is not a regular file');
+				}
+			}
+
+			// Write the hook file with secure permissions
+			fs.writeFileSync(preCommitPath, preCommitHook, { mode: 0o755 });
+			
+			// Security: Verify the written file path is still safe
+			const writtenStats = fs.statSync(preCommitPath);
+			if (!writtenStats.isFile()) {
+				throw new Error('Written pre-commit hook is not a regular file');
+			}
+
+			// Securely set executable permissions using validated path
+			const chmodResult = await secureExec({
+				command: 'chmod',
+				args: ['+x', preCommitPath],
+				timeout: 5000
+			});
+			if (!chmodResult.success) {
+				throw new Error(`Failed to set executable permissions: ${chmodResult.stderr}`);
+			}
 
 		} catch (error) {
 			// Git hooks setup failed, but don't fail the whole operation
@@ -726,8 +828,136 @@ exit 0`;
 		}
 	}
 
+	/**
+	 * Validate project name to prevent injection attacks
+	 * @param projectName - Project name to validate
+	 * @returns true if project name is safe
+	 */
+	private static validateProjectName(projectName: string): boolean {
+		if (!projectName || typeof projectName !== 'string') {
+			return false;
+		}
+		
+		// Check for dangerous characters and patterns
+		const dangerousPatterns = [
+			/[\r\n]/,           // Line breaks
+			/[;&|`$()]/,        // Shell metacharacters
+			/\.\.[\/\\]/,       // Directory traversal
+			/[\0]/,             // Null bytes
+			/[<>:"|?*]/,        // Invalid filename characters
+			/^[\s]*$/,          // Only whitespace
+		];
+		
+		for (const pattern of dangerousPatterns) {
+			if (pattern.test(projectName)) {
+				return false;
+			}
+		}
+		
+		// Check length limits
+		if (projectName.length > 255) {
+			return false;
+		}
+		
+		return true;
+	}
+
+	/**
+	 * Validate project path to ensure it's within allowed boundaries
+	 * @param projectPath - Project path to validate
+	 * @returns true if path is safe
+	 */
+	private static validateProjectPath(projectPath: string): boolean {
+		if (!projectPath || typeof projectPath !== 'string') {
+			return false;
+		}
+		
+		try {
+			// Get base project path from configuration
+			const basePath = TmuxProjectOrchestrator.staticPathResolver.getProjectBasePath();
+			const resolvedBasePath = path.resolve(basePath);
+			
+			// Validate that project path is within allowed base directory
+			return TmuxProjectOrchestrator.staticPathResolver.isPathSafe(projectPath, resolvedBasePath);
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Create a safe temporary file path with validation
+	 * @param sessionName - Session name to use in filename
+	 * @param suffix - File suffix/extension
+	 * @returns Safe temporary file path
+	 */
+	private static createSafeTempPath(sessionName: string, suffix: string): string {
+		if (!TmuxProjectOrchestrator.validateProjectName(sessionName)) {
+			throw new Error('Invalid session name for temp file');
+		}
+		
+		if (!suffix || typeof suffix !== 'string' || suffix.length > 50) {
+			throw new Error('Invalid file suffix');
+		}
+		
+		// Sanitize suffix to prevent path traversal
+		const safeSuffix = suffix.replace(/[^a-zA-Z0-9._-]/g, '_');
+		
+		// Create safe filename with session name
+		const safeSessionName = sessionName.replace(/[^a-zA-Z0-9._-]/g, '_');
+		const filename = `${safeSessionName}_${safeSuffix}`;
+		
+		// Use system temp directory with validation
+		const tempDir = '/tmp';
+		const tempPath = path.join(tempDir, filename);
+		
+		// Final validation that path is safe
+		if (!TmuxProjectOrchestrator.staticPathResolver.isPathSafe(tempPath, tempDir)) {
+			throw new Error('Temp file path validation failed');
+		}
+		
+		return tempPath;
+	}
+
+	/**
+	 * Safely write to a temporary file with validation
+	 * @param sessionName - Session name for file
+	 * @param suffix - File suffix
+	 * @param data - Data to write
+	 * @returns Path to written file
+	 */
+	private static safeTempFileWrite(sessionName: string, suffix: string, data: string): string {
+		const safePath = TmuxProjectOrchestrator.createSafeTempPath(sessionName, suffix);
+		
+		// Write with secure permissions
+		fs.writeFileSync(safePath, data, { mode: 0o644 });
+		
+		return safePath;
+	}
+
+	/**
+	 * Safely read from a temporary file with validation
+	 * @param sessionName - Session name for file
+	 * @param suffix - File suffix
+	 * @returns File content or null if doesn't exist
+	 */
+	private safeTempFileRead(sessionName: string, suffix: string): string | null {
+		const safePath = TmuxProjectOrchestrator.createSafeTempPath(sessionName, suffix);
+		
+		if (!fs.existsSync(safePath)) {
+			return null;
+		}
+		
+		// Verify it's a regular file
+		const stats = fs.statSync(safePath);
+		if (!stats.isFile()) {
+			throw new Error('Temp path exists but is not a regular file');
+		}
+		
+		return fs.readFileSync(safePath, 'utf8');
+	}
+
 	// Additional methods for other operations will be implemented
-	private async getStatus(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleGetStatus(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		
 		try {
@@ -779,7 +1009,7 @@ exit 0`;
 				teamStatus.push({
 					window: window.windowName,
 					index: window.windowIndex,
-					role: this.identifyAgentRole(window.windowName),
+					role: TmuxProjectOrchestrator.identifyAgentRole(window.windowName),
 					status: statusText,
 					active: window.active,
 				});
@@ -795,14 +1025,14 @@ exit 0`;
 				teamCount: session.windows.length,
 				teamStatus,
 				lastUpdated: new Date().toISOString(),
-				recommendations: this.generateStatusRecommendations(teamStatus, qaApproved),
+				recommendations: TmuxProjectOrchestrator.generateStatusRecommendations(teamStatus, qaApproved),
 			};
 		} catch (error) {
 			throw new Error(`Failed to get status: ${error.message}`);
 		}
 	}
 
-	private async generateReport(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleGenerateReport(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 
 		try {
@@ -844,19 +1074,19 @@ exit 0`;
 				// Analyze activity patterns (safely)
 				const commandCount = lines.filter(l => l.startsWith('$') || l.startsWith('>')).length;
 				const errorCount = lines.filter(l => /error|exception|failed/i.test(l)).length;
-				const testResults = this.extractTestResults(lines);
-				const commitActivity = this.extractGitActivity(lines);
+				const testResults = TmuxProjectOrchestrator.extractTestResults(lines);
+				const commitActivity = TmuxProjectOrchestrator.extractGitActivity(lines);
 
 				detailedActivities.push({
 					agent: window.windowName,
-					role: this.identifyAgentRole(window.windowName),
+					role: TmuxProjectOrchestrator.identifyAgentRole(window.windowName),
 					index: window.windowIndex,
 					commandsExecuted: commandCount,
 					errorsDetected: errorCount,
 					testResults,
 					gitActivity: commitActivity,
 					lastActivity,
-					productivity: this.calculateProductivity(lines),
+					productivity: TmuxProjectOrchestrator.calculateProductivity(lines),
 				});
 			}
 
@@ -872,7 +1102,7 @@ exit 0`;
 			const avgProductivity = detailedActivities.reduce((sum, a) => sum + a.productivity, 0) / detailedActivities.length;
 
 			// Generate recommendations
-			const recommendations = this.generateProjectRecommendations(detailedActivities, qaStatus, projectState);
+			const recommendations = TmuxProjectOrchestrator.generateProjectRecommendations(detailedActivities, qaStatus, projectState);
 
 			const report = {
 				success: true,
@@ -889,7 +1119,7 @@ exit 0`;
 					qaStatus,
 					commitsBlocked: !fs.existsSync(qaApprovalFile),
 					qualityGatesActive: true,
-					lastQAAction: this.getLastQAAction(sessionName),
+					lastQAAction: TmuxProjectOrchestrator.getLastQAAction(sessionName),
 				},
 				teamPerformance: {
 					totalCommands,
@@ -899,7 +1129,7 @@ exit 0`;
 				},
 				agentDetails: detailedActivities,
 				recommendations,
-				riskAssessment: this.assessProjectRisks(detailedActivities, qaStatus),
+				riskAssessment: TmuxProjectOrchestrator.assessProjectRisks(detailedActivities, qaStatus),
 			};
 
 			// Save report to file
@@ -915,7 +1145,7 @@ exit 0`;
 		}
 	}
 
-	private async scheduleTask(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleScheduleTask(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const taskDescription = context.getNodeParameter('taskDescription', itemIndex) as string;
 		const requiresQA = context.getNodeParameter('requiresQA', itemIndex) as boolean;
@@ -923,7 +1153,7 @@ exit 0`;
 
 		try {
 			const taskId = `TASK-${Date.now()}`;
-			const taskPriority = this.assessTaskPriority(taskDescription);
+			const taskPriority = TmuxProjectOrchestrator.assessTaskPriority(taskDescription);
 			
 			// Create task with QA requirements
 			const taskMessage = `
@@ -1032,7 +1262,7 @@ Please prepare for testing when development completes.`);
 		}
 	}
 
-	private async manageTeam(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleManageTeam(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const teamAction = context.getNodeParameter('teamAction', itemIndex) as string;
 
@@ -1046,13 +1276,13 @@ Please prepare for testing when development completes.`);
 
 			switch (teamAction) {
 				case 'add':
-					return await this.addTeamMember(context, itemIndex, bridge, session);
+					return await TmuxProjectOrchestrator.addTeamMember(context, itemIndex, bridge, session);
 				case 'remove':
-					return await this.removeTeamMember(context, itemIndex, bridge, session);
+					return await TmuxProjectOrchestrator.removeTeamMember(context, itemIndex, bridge, session);
 				case 'list':
-					return await this.listTeamMembers(session);
+					return await TmuxProjectOrchestrator.listTeamMembers(session);
 				case 'standup':
-					return await this.conductStandup(bridge, session);
+					return await TmuxProjectOrchestrator.conductStandup(bridge, session);
 				default:
 					throw new Error(`Unknown team action: ${teamAction}`);
 			}
@@ -1061,23 +1291,37 @@ Please prepare for testing when development completes.`);
 		}
 	}
 
-	private async addTeamMember(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge, session: any): Promise<any> {
+	private static async addTeamMember(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge, session: any): Promise<any> {
 		const memberRole = context.getNodeParameter('memberRole', itemIndex) as string;
 		const sessionName = session.name;
 
 		try {
 			const newWindowIndex = session.windows.length;
-			const windowName = this.getWindowNameForRole(memberRole);
+			const windowName = TmuxProjectOrchestrator.getWindowNameForRole(memberRole);
 
-			// Create new window
-			execSync(`tmux new-window -t ${sessionName} -n "${windowName}"`);
+			// Validate inputs to prevent injection
+			if (!sessionName || typeof sessionName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+				throw new Error('Invalid session name - must contain only letters, numbers, underscores, and hyphens');
+			}
+			if (!windowName || typeof windowName !== 'string' || windowName.length > 50) {
+				throw new Error('Invalid window name');
+			}
+
+			// Create new window securely
+			const newWindowResult = await secureTmux('new-window', ['-t', sessionName, '-n', windowName]);
+			if (!newWindowResult.success) {
+				throw new Error(`Failed to create new window: ${newWindowResult.stderr}`);
+			}
 			
-			// Start Claude agent
-			execSync(`tmux send-keys -t ${sessionName}:${newWindowIndex} "claude" Enter`);
+			// Start Claude agent securely
+			const claudeResult = await secureTmux('send-keys', ['-t', `${sessionName}:${newWindowIndex}`, 'claude', 'Enter']);
+			if (!claudeResult.success) {
+				throw new Error(`Failed to start Claude agent: ${claudeResult.stderr}`);
+			}
 			await new Promise(resolve => setTimeout(resolve, 5000));
 
 			// Send role briefing
-			const roleBriefing = this.getRoleBriefing(memberRole);
+			const roleBriefing = TmuxProjectOrchestrator.getRoleBriefing(memberRole);
 			await bridge.sendClaudeMessage(`${sessionName}:${newWindowIndex}`, roleBriefing);
 
 			// Notify PM
@@ -1111,7 +1355,7 @@ You will need to validate their code changes before git commits.`);
 		}
 	}
 
-	private async removeTeamMember(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge, session: any): Promise<any> {
+	private static async removeTeamMember(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge, session: any): Promise<any> {
 		const windowIndex = context.getNodeParameter('windowIndex', itemIndex) as number;
 		const sessionName = session.name;
 
@@ -1132,8 +1376,19 @@ You will need to validate their code changes before git commits.`);
 			// Capture final status before removal
 			const finalStatus = await bridge.captureWindowContent(sessionName, windowIndex, 50);
 
-			// Kill the window
-			execSync(`tmux kill-window -t ${sessionName}:${windowIndex}`);
+			// Validate inputs to prevent injection
+			if (!sessionName || typeof sessionName !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+				throw new Error('Invalid session name - must contain only letters, numbers, underscores, and hyphens');
+			}
+			if (!Number.isInteger(windowIndex) || windowIndex < 0) {
+				throw new Error('Invalid window index');
+			}
+
+			// Kill the window securely
+			const killResult = await secureTmux('kill-window', ['-t', `${sessionName}:${windowIndex}`]);
+			if (!killResult.success) {
+				throw new Error(`Failed to kill window: ${killResult.stderr}`);
+			}
 
 			// Notify PM
 			await bridge.sendClaudeMessage(`${sessionName}:0`, 
@@ -1166,11 +1421,11 @@ Please redistribute any pending tasks to remaining team members.`);
 		}
 	}
 
-	private async listTeamMembers(session: any): Promise<any> {
+	private static async listTeamMembers(session: any): Promise<any> {
 		const teamMembers = session.windows.map(window => ({
 			index: window.windowIndex,
 			name: window.windowName,
-			role: this.identifyAgentRole(window.windowName),
+			role: TmuxProjectOrchestrator.identifyAgentRole(window.windowName),
 			active: window.active,
 			essential: window.windowIndex <= 1, // PM and QA are essential
 		}));
@@ -1193,7 +1448,7 @@ Please redistribute any pending tasks to remaining team members.`);
 		};
 	}
 
-	private async conductStandup(bridge: TmuxBridge, session: any): Promise<any> {
+	private static async conductStandup(bridge: TmuxBridge, session: any): Promise<any> {
 		const sessionName = session.name;
 
 		try {
@@ -1242,7 +1497,7 @@ Please respond promptly for team coordination.`
 
 				standupResults.push({
 					agent: window.windowName,
-					role: this.identifyAgentRole(window.windowName),
+					role: TmuxProjectOrchestrator.identifyAgentRole(window.windowName),
 					index: window.windowIndex,
 					response: standupResponse,
 				});
@@ -1272,7 +1527,7 @@ Please respond promptly for team coordination.`
 		}
 	}
 
-	private async runQATests(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleRunQATests(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const testTypes = context.getNodeParameter('testTypes', itemIndex) as string[];
 
@@ -1322,14 +1577,13 @@ Please begin testing now and report results.`;
 		}
 	}
 
-	private async approveCommit(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleApproveCommit(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const commitMessage = context.getNodeParameter('commitMessage', itemIndex, '') as string;
 		const qaFeedback = context.getNodeParameter('qaFeedback', itemIndex, '') as string;
 
 		try {
 			// Create QA approval flag
-			const qaApprovalFile = `/tmp/${sessionName}_qa_approval.flag`;
 			const approvalData = {
 				approved: true,
 				timestamp: new Date().toISOString(),
@@ -1337,7 +1591,7 @@ Please begin testing now and report results.`;
 				qaFeedback,
 			};
 
-			fs.writeFileSync(qaApprovalFile, JSON.stringify(approvalData, null, 2));
+			const qaApprovalFile = TmuxProjectOrchestrator.safeTempFileWrite(sessionName, 'qa_approval.flag', JSON.stringify(approvalData, null, 2));
 
 			// Notify team of approval
 			await bridge.sendClaudeMessage(`${sessionName}:0`, 
@@ -1362,7 +1616,7 @@ You may now proceed with git operations.`);
 		}
 	}
 
-	private async blockCommit(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+	static async handleBlockCommit(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
 		const sessionName = context.getNodeParameter('sessionName', itemIndex) as string;
 		const commitMessage = context.getNodeParameter('commitMessage', itemIndex, '') as string;
 		const qaFeedback = context.getNodeParameter('qaFeedback', itemIndex, '') as string;
@@ -1408,7 +1662,7 @@ Please address the QA concerns and request new testing.`);
 		}
 	}
 
-	private identifyAgentRole(windowName: string): string {
+	private static identifyAgentRole(windowName: string): string {
 		const name = windowName.toLowerCase();
 		if (name.includes('manager')) return 'project-manager';
 		if (name.includes('qa') || name.includes('quality')) return 'qa-engineer';
@@ -1421,7 +1675,7 @@ Please address the QA concerns and request new testing.`);
 		return 'team-member';
 	}
 
-	private generateStatusRecommendations(teamStatus: any[], qaApproved: boolean): string[] {
+	private static generateStatusRecommendations(teamStatus: any[], qaApproved: boolean): string[] {
 		const recommendations = [];
 
 		if (!qaApproved) {
@@ -1450,7 +1704,7 @@ Please address the QA concerns and request new testing.`);
 	}
 
 	// Helper methods for analysis and utility functions
-	private extractTestResults(lines: string[]): any {
+	private static extractTestResults(lines: string[]): any {
 		const testKeywords = ['test', 'spec', 'passed', 'failed', 'coverage'];
 		const testLines = lines.filter(line => 
 			testKeywords.some(keyword => line.toLowerCase().includes(keyword))
@@ -1463,7 +1717,7 @@ Please address the QA concerns and request new testing.`);
 		};
 	}
 
-	private extractGitActivity(lines: string[]): any {
+	private static extractGitActivity(lines: string[]): any {
 		const gitCommands = lines.filter(line => 
 			line.includes('git ') || line.includes('commit') || line.includes('push')
 		);
@@ -1475,7 +1729,7 @@ Please address the QA concerns and request new testing.`);
 		};
 	}
 
-	private calculateProductivity(lines: string[]): number {
+	private static calculateProductivity(lines: string[]): number {
 		const nonEmptyLines = lines.filter(l => l.trim()).length;
 		const commandLines = lines.filter(l => l.startsWith('$') || l.startsWith('>')).length;
 		const errorLines = lines.filter(l => /error|exception|failed/i.test(l)).length;
@@ -1486,7 +1740,7 @@ Please address the QA concerns and request new testing.`);
 		return Math.max(0, (commandLines - errorLines) / nonEmptyLines);
 	}
 
-	private generateProjectRecommendations(activities: any[], qaStatus: string, projectState: any): string[] {
+	private static generateProjectRecommendations(activities: any[], qaStatus: string, projectState: any): string[] {
 		const recommendations = [];
 		
 		if (qaStatus === 'blocked') {
@@ -1510,7 +1764,7 @@ Please address the QA concerns and request new testing.`);
 		return recommendations.length > 0 ? recommendations : ['Project appears healthy - continue monitoring'];
 	}
 
-	private assessProjectRisks(activities: any[], qaStatus: string): any {
+	private static assessProjectRisks(activities: any[], qaStatus: string): any {
 		const risks = [];
 		
 		if (qaStatus === 'blocked') {
@@ -1534,7 +1788,7 @@ Please address the QA concerns and request new testing.`);
 		};
 	}
 
-	private getLastQAAction(sessionName: string): string {
+	private static getLastQAAction(sessionName: string): string {
 		const approvalFile = `/tmp/${sessionName}_qa_approval.flag`;
 		const blockFile = `/tmp/${sessionName}_qa_block.json`;
 		
@@ -1551,7 +1805,7 @@ Please address the QA concerns and request new testing.`);
 		return 'No QA actions recorded';
 	}
 
-	private assessTaskPriority(description: string): string {
+	private static assessTaskPriority(description: string): string {
 		const highPriorityKeywords = ['urgent', 'critical', 'bug', 'security', 'fix', 'broken'];
 		const mediumPriorityKeywords = ['feature', 'enhancement', 'improve', 'optimize'];
 		
@@ -1568,7 +1822,7 @@ Please address the QA concerns and request new testing.`);
 		return 'NORMAL';
 	}
 
-	private getWindowNameForRole(role: string): string {
+	private static getWindowNameForRole(role: string): string {
 		const roleMap = {
 			developer: 'Developer',
 			seniorDeveloper: 'Senior-Developer',
@@ -1580,7 +1834,7 @@ Please address the QA concerns and request new testing.`);
 		return roleMap[role] || 'Team-Member';
 	}
 
-	private getRoleBriefing(role: string): string {
+	private static getRoleBriefing(role: string): string {
 		const briefings = {
 			developer: `You are a Developer on this project. Your responsibilities:
 
