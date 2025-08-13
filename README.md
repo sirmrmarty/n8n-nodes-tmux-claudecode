@@ -1,6 +1,6 @@
-# n8n-nodes-tmux-orchestrator
+# n8n-nodes-tmux-claudecode
 
-Powerful n8n nodes for orchestrating Claude AI agents through tmux sessions. Enable 24/7 autonomous development workflows, automated code reviews, and intelligent project management - all within n8n's visual automation platform.
+Powerful n8n node for orchestrating Claude AI agents through tmux sessions with mandatory QA validation. Enable 24/7 autonomous development workflows, automated code reviews, and intelligent project management - all within n8n's visual automation platform.
 
 ## 🚀 Features
 
@@ -15,14 +15,14 @@ Powerful n8n nodes for orchestrating Claude AI agents through tmux sessions. Ena
 ### Community Node (Recommended)
 1. In n8n, go to **Settings** > **Community Nodes**
 2. Click **Install**
-3. Enter **@sirmrmarty/n8n-nodes-tmux-claudecode**
+3. Enter **@sirmrmarty/n8n-nodes-tmux-orchestrator**
 4. Confirm & enjoy!
 
 ### Manual Installation
 ```bash
 cd ~/.n8n/custom
-git clone https://github.com/sirmrmarty/n8n-nodes-tmux-claudecoder.git
-cd n8n-nodes-tmux-orchestrator
+git clone https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode.git
+cd n8n-nodes-tmux-claudecode
 npm install
 npm run build
 ```
@@ -33,68 +33,49 @@ npm run build
 - Python 3.x for advanced monitoring features
 - The tmux orchestrator scripts from the parent project
 
-## 🎯 Node Types
+## 🎯 Node Type
 
-### 1. Tmux Orchestrator
-Core node for managing Claude agents.
+### Tmux Project Orchestrator
+Unified project management with mandatory QA validation.
 
 **Operations:**
-- `deployAgent` - Start a new Claude agent in a tmux session
-- `sendMessage` - Send instructions to an agent
-- `captureOutput` - Get recent output from an agent
+- `createProject` - Initialize project from idea with AI planning
+- `approvePlan` - Approve generated project plans
+- `assignTask` - Delegate work to team members  
+- `getProgress` - Track project completion status
+- `validateQuality` - Run mandatory QA validation
+- `createTeamMember` - Add new specialized team members
+- `dailyStandup` - Collect comprehensive status updates
+- `deployAgent` - Start Claude agents in tmux sessions
+- `sendMessage` - Send instructions to agents
+- `captureOutput` - Get recent output from agents
 - `getStatus` - Check agent health and activity
 - `listSessions` - List all active tmux sessions
-- `terminateAgent` - Cleanly shutdown an agent
-
-### 2. Tmux Project Manager
-Coordinate multi-agent projects with quality control.
-
-**Operations:**
-- `createProject` - Initialize project with PM and team
-- `assignTask` - Delegate work to team members
-- `getProgress` - Track project completion
-- `validateQuality` - Run PM quality checks
-- `createTeamMember` - Add new team members
-- `dailyStandup` - Collect status updates
-
-### 3. Tmux Agent Monitor
-Monitor and analyze agent health and activity.
-
-**Operations:**
-- `listAllSessions` - Get all sessions with details
+- `terminateAgent` - Cleanly shutdown agents
 - `healthCheck` - Check agent responsiveness
 - `collectLogs` - Aggregate conversation logs
 - `detectBlockers` - Identify stuck agents
-- `monitorSnapshot` - Create monitoring snapshot
-- `activityReport` - Generate activity reports
-
-### 4. Tmux Scheduler
-Schedule tasks and automate agent check-ins.
-
-**Operations:**
 - `scheduleCheckIn` - Schedule future check-ins
 - `createReminder` - Set agent reminders
-- `manageCronJobs` - Create recurring tasks
-- `listScheduledTasks` - View all scheduled tasks
-- `cancelTask` - Cancel scheduled tasks
-- `batchSchedule` - Schedule multiple tasks
 
 ## 🔧 Configuration
 
 ### Setting Up Credentials
 1. In n8n, go to **Credentials**
-2. Create new **Tmux Orchestrator Configuration**
+2. Create new **Tmux Orchestrator API**
 3. Configure paths and settings:
 
 ```json
 {
-  "scriptsDirectory": "/path/to/tmux-orchestrator",
+  "scriptsDirectory": "/path/to/scripts",
   "projectBasePath": "~/Coding",
   "claudeCommand": "claude",
   "defaultAgentRole": "developer",
   "agentStartupDelay": 5000,
   "gitAutoCommit": true,
-  "gitCommitInterval": 30
+  "gitCommitInterval": 30,
+  "qaValidationEnabled": true,
+  "performanceOptimizationsEnabled": true
 }
 ```
 
@@ -148,25 +129,25 @@ projects.forEach(project => {
 
 ## 🎮 Usage Examples
 
-### Deploy a Developer Agent
-```javascript
-{
-  "operation": "deployAgent",
-  "sessionName": "my-project",
-  "projectPath": "/home/user/projects/my-app",
-  "agentRole": "developer",
-  "initialBriefing": "You are working on a React application. Focus on implementing the user authentication feature."
-}
-```
-
-### Create a Project Team
+### Create a Project from Idea
 ```javascript
 {
   "operation": "createProject",
-  "projectName": "new-feature",
+  "projectName": "payment-system",
   "projectPath": "/home/user/projects/app",
-  "projectSpec": "Implement payment processing with Stripe",
-  "teamSize": "medium"
+  "projectIdea": "Implement secure payment processing with Stripe integration, including subscription management and webhook handling",
+  "complexityLevel": "medium"
+}
+```
+
+### Deploy a Specialized Agent
+```javascript
+{
+  "operation": "deployAgent",
+  "sessionName": "frontend-dev",
+  "projectPath": "/home/user/projects/my-app",
+  "agentRole": "frontend",
+  "initialBriefing": "You are a frontend specialist working on React components with TypeScript. Focus on user interface and user experience."
 }
 ```
 
@@ -180,12 +161,13 @@ projects.forEach(project => {
 }
 ```
 
-### Monitor Agent Health
+### Run QA Validation
 ```javascript
 {
-  "operation": "healthCheck",
-  "targetSessions": "project-1,project-2",
-  "responseTimeout": 10
+  "operation": "validateQuality",
+  "projectName": "payment-system",
+  "validationType": "comprehensive",
+  "includeSecurityScan": true
 }
 ```
 
@@ -208,32 +190,32 @@ projects.forEach(project => {
 
 ## 🛠️ Advanced Features
 
-### Agent Templates
-Define custom agent templates in credentials:
+### Mandatory QA Validation
+Every project includes comprehensive quality assurance:
+- Code quality analysis
+- Security vulnerability scanning
+- Performance optimization checks
+- Documentation validation
+- Test coverage analysis
 
-```json
-{
-  "agentTemplates": {
-    "frontend": {
-      "briefing": "You are a frontend specialist...",
-      "tools": ["react", "typescript", "jest"],
-      "commitFrequency": 30
-    }
-  }
-}
-```
+### Intelligent Agent Orchestration
+- AI-powered project planning from ideas
+- Specialized agent roles (frontend, backend, QA, security)
+- Dynamic team member creation based on project needs
+- Subagent suggestions for complex tasks
+
+### Enhanced Security & Performance  
+- Secure execution environment with input validation
+- Cryptographic operations for sensitive data
+- Performance optimizations with caching
+- Python process pooling for heavy operations
+- Resource monitoring and cleanup
 
 ### Git Auto-Commit
-Agents automatically commit work every 30 minutes:
+Agents automatically commit work with configurable intervals:
 - Prevents work loss
-- Maintains history
-- Enables rollbacks
-
-### Blocker Detection
-Automatically identifies stuck agents by detecting:
-- Error keywords
-- Repetitive output
-- Waiting for input states
+- Maintains detailed history
+- Enables easy rollbacks
 
 ## 🐛 Troubleshooting
 
@@ -248,10 +230,15 @@ Automatically identifies stuck agents by detecting:
 2. Check cron service running
 3. Validate script paths in credentials
 
+### QA Validation Failures
+1. Check project structure and dependencies
+2. Verify security scan tools are available
+3. Review validation logs in project directory
+
 ### Python Bridge Errors
 1. Ensure Python 3.x installed
-2. Check tmux_utils.py path
-3. Verify script permissions
+2. Check tmux_utils.py and tmux_wrapper.py paths
+3. Verify script permissions and dependencies
 
 ## 📖 Documentation
 
@@ -259,17 +246,20 @@ Automatically identifies stuck agents by detecting:
 See [API.md](docs/API.md) for detailed node documentation.
 
 ### Best Practices
-- Always set up health monitoring
-- Use meaningful session names
-- Schedule regular check-ins
-- Implement error recovery
-- Log agent conversations
+- Always enable QA validation for production projects
+- Use meaningful session and project names
+- Schedule regular check-ins and standups
+- Implement proper error recovery strategies
+- Monitor agent health and performance metrics
+- Review and approve AI-generated project plans
 
 ### Security Considerations
-- Credentials are encrypted
-- Scripts run with user permissions
-- No hardcoded secrets
-- Audit log available
+- Credentials are encrypted and securely stored
+- All operations run in isolated secure execution environment
+- Input validation prevents injection attacks
+- Cryptographic operations use industry-standard libraries
+- No hardcoded secrets or sensitive data exposure
+- Comprehensive audit logging available
 
 ## 🤝 Contributing
 
@@ -290,6 +280,6 @@ Built on top of the [N8N Tmux Orchestrator Claude Code](https://github.com/sirmr
 ## 🔗 Links
 
 - [n8n Documentation](https://docs.n8n.io)
-- [Tmux Orchestrator](https://github.com/Jedward23/tmux-orchestrator)
-- [Claude AI](https://claude.ai)
-- [Report Issues](https://github.com/marwim/n8n-nodes-tmux-orchestrator/issues)
+- [Claude AI Documentation](https://claude.ai)
+- [GitHub Repository](https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode)
+- [Report Issues](https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode/issues)
