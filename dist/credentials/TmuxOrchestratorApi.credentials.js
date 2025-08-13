@@ -5,7 +5,7 @@ class TmuxOrchestratorApi {
     constructor() {
         this.name = 'tmuxOrchestratorApi';
         this.displayName = 'Tmux Orchestrator Configuration';
-        this.documentationUrl = 'https://github.com/marwim/n8n-nodes-tmux-orchestrator';
+        this.documentationUrl = 'https://github.com/sirmrmarty/n8n-nodes-tmux-claudecode';
         this.properties = [
             {
                 displayName: 'Configuration Name',
