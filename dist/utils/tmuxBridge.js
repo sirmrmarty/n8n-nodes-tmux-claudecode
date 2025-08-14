@@ -87,6 +87,121 @@ class TmuxBridge {
             this.pythonPool = null;
         }
     }
+    async initializeClaudeAgent(sessionName, windowIndex, credentials = {}) {
+        let claudeCommand = 'claude';
+        let subagentConfig = '';
+        if (credentials?.subagentConfig) {
+            const subagentCfg = credentials.subagentConfig;
+            if (subagentCfg.enableAllSubagents) {
+                subagentConfig = '--subagents all';
+            }
+            else if (subagentCfg.customSubagents) {
+                subagentConfig = `--subagents ${subagentCfg.customSubagents}`;
+            }
+        }
+        if (credentials?.claudeCommandOptions) {
+            claudeCommand += ` ${credentials.claudeCommandOptions}`;
+        }
+        if (credentials?.claudeCommand) {
+            claudeCommand = credentials.claudeCommand;
+        }
+        const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+        const targetWindow = `${sessionName}:${windowIndex}`;
+        await (0, secureExecution_1.secureTmux)('send-keys', ['-t', targetWindow, `"${fullCommand}"`, 'Enter']);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        try {
+            const output = await this.captureWindowContent(sessionName, windowIndex, 10);
+            if (typeof output === 'string' && !output.includes('Claude')) {
+                console.warn(`Claude agent may not have started properly in ${targetWindow}`);
+            }
+        }
+        catch (error) {
+            console.warn(`Failed to verify Claude agent startup: ${error.message}`);
+        }
+    }
+    async setupGitHubCLI(credentials) {
+        try {
+            if (!credentials?.githubConfig?.githubToken) {
+                console.warn('No GitHub token provided - GitHub CLI operations may fail');
+                return false;
+            }
+            const token = credentials.githubConfig.githubToken;
+            await (0, secureExecution_1.secureExec)({
+                command: 'gh',
+                args: ['auth', 'login', '--with-token'],
+                timeout: 10000,
+            });
+            const result = await (0, secureExecution_1.secureExec)({
+                command: 'gh',
+                args: ['auth', 'status']
+            });
+            return result.success;
+        }
+        catch (error) {
+            console.error('Failed to setup GitHub CLI:', error.message);
+            return false;
+        }
+    }
+    async createGitHubPR(projectPath, options) {
+        try {
+            if (options.credentials) {
+                const authSuccess = await this.setupGitHubCLI(options.credentials);
+                if (!authSuccess) {
+                    return { success: false, error: 'GitHub authentication failed' };
+                }
+            }
+            const result = await (0, secureExecution_1.secureExec)({
+                command: 'gh',
+                args: [
+                    'pr', 'create',
+                    '--title', options.title,
+                    '--body', options.body,
+                    '--base', options.base,
+                    '--head', options.head,
+                    '--repo', options.credentials?.githubConfig?.defaultRepository || 'origin'
+                ],
+                cwd: projectPath,
+                timeout: 30000,
+            });
+            if (result.success && result.stdout) {
+                const urlMatch = result.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+                const prUrl = urlMatch ? urlMatch[0] : '';
+                return {
+                    success: true,
+                    prUrl,
+                };
+            }
+            return {
+                success: false,
+                error: result.stderr || 'PR creation failed'
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: `GitHub PR creation error: ${error.message}`
+            };
+        }
+    }
+    async isGitHubCLIReady() {
+        try {
+            const result = await (0, secureExecution_1.secureExec)({
+                command: 'gh',
+                args: ['--version']
+            });
+            if (!result.success) {
+                return false;
+            }
+            const authResult = await (0, secureExecution_1.secureExec)({
+                command: 'gh',
+                args: ['auth', 'status']
+            });
+            return authResult.success;
+        }
+        catch {
+            return false;
+        }
+    }
     async executePython(method, args = []) {
         const startTime = Date.now();
         try {

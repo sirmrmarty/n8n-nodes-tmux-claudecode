@@ -338,8 +338,41 @@ export class TmuxOrchestrator implements INodeType {
 			// Rename window based on role
 			execSync(`tmux rename-window -t ${sessionName}:0 "Claude-${agentRole}"`);
 
-			// Start Claude
-			execSync(`tmux send-keys -t ${sessionName}:0 "claude" Enter`);
+			// Get credentials for proper agent configuration
+			let claudeCommand = 'claude';
+			let subagentConfig = '';
+			
+			try {
+				const credentials = await context.getCredentials('tmuxOrchestratorApi');
+				
+				// Build claude command with subagent support
+				if (credentials?.subagentConfig) {
+					const subagentCfg = credentials.subagentConfig as any;
+					if (subagentCfg.enableAllSubagents) {
+						subagentConfig = '--subagents all';
+					} else if (subagentCfg.customSubagents) {
+						subagentConfig = `--subagents ${subagentCfg.customSubagents}`;
+					}
+				}
+				
+				// Add additional command options
+				if (credentials?.claudeCommandOptions) {
+					claudeCommand += ` ${credentials.claudeCommandOptions}`;
+				}
+				
+				// Use custom claude command if specified
+				if (credentials?.claudeCommand) {
+					claudeCommand = credentials.claudeCommand as string;
+				}
+			} catch {
+				// Credentials not configured, use defaults
+			}
+			
+			// Build the full command
+			const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+			
+			// Start Claude with proper configuration
+			execSync(`tmux send-keys -t ${sessionName}:0 "${fullCommand}" Enter`);
 			
 			// Wait for Claude to start
 			await new Promise(resolve => setTimeout(resolve, 5000));

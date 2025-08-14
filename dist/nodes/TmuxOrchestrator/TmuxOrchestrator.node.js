@@ -316,7 +316,30 @@ class TmuxOrchestrator {
                 : `tmux new-session -d -s ${sessionName}`;
             (0, child_process_1.execSync)(createCmd);
             (0, child_process_1.execSync)(`tmux rename-window -t ${sessionName}:0 "Claude-${agentRole}"`);
-            (0, child_process_1.execSync)(`tmux send-keys -t ${sessionName}:0 "claude" Enter`);
+            let claudeCommand = 'claude';
+            let subagentConfig = '';
+            try {
+                const credentials = await context.getCredentials('tmuxOrchestratorApi');
+                if (credentials?.subagentConfig) {
+                    const subagentCfg = credentials.subagentConfig;
+                    if (subagentCfg.enableAllSubagents) {
+                        subagentConfig = '--subagents all';
+                    }
+                    else if (subagentCfg.customSubagents) {
+                        subagentConfig = `--subagents ${subagentCfg.customSubagents}`;
+                    }
+                }
+                if (credentials?.claudeCommandOptions) {
+                    claudeCommand += ` ${credentials.claudeCommandOptions}`;
+                }
+                if (credentials?.claudeCommand) {
+                    claudeCommand = credentials.claudeCommand;
+                }
+            }
+            catch {
+            }
+            const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+            (0, child_process_1.execSync)(`tmux send-keys -t ${sessionName}:0 "${fullCommand}" Enter`);
             await new Promise(resolve => setTimeout(resolve, 5000));
             if (initialBriefing) {
                 const briefing = this.formatBriefingForRole(agentRole, initialBriefing);

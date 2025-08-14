@@ -13,4 +13,8 @@ export declare class TmuxProjectManager implements INodeType {
     private deployInitialTeam;
     private getValidationChecklist;
     private getRoleBriefing;
+    private checkCompletion;
+    private pushToRemote;
+    private createPullRequest;
+    private completeProject;
 }

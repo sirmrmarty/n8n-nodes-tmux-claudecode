@@ -214,6 +214,7 @@ SecureCommandExecutor.ALLOWED_COMMANDS = new Set([
     'npm',
     'yarn',
     'git',
+    'gh',
     'bash',
     'sh',
     'sleep',

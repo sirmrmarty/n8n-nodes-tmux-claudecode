@@ -39,6 +39,20 @@ export declare class TmuxBridge {
     private debouncedCapture;
     private throttledStatus;
     constructor(config?: TmuxBridgeConfig);
+    initializeClaudeAgent(sessionName: string, windowIndex: number, credentials?: any): Promise<void>;
+    setupGitHubCLI(credentials: any): Promise<boolean>;
+    createGitHubPR(projectPath: string, options: {
+        title: string;
+        body: string;
+        base: string;
+        head: string;
+        credentials?: any;
+    }): Promise<{
+        success: boolean;
+        prUrl?: string;
+        error?: string;
+    }>;
+    isGitHubCLIReady(): Promise<boolean>;
     private executePython;
     private executePythonDirect;
     getTmuxSessions(): Promise<TmuxSession[]>;

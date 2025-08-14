@@ -33,6 +33,7 @@ export class SecureCommandExecutor {
 		'npm',
 		'yarn',
 		'git',
+		'gh',
 		'bash',
 		'sh',
 		'sleep',

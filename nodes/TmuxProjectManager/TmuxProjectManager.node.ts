@@ -65,6 +65,26 @@ export class TmuxProjectManager implements INodeType {
 						value: 'dailyStandup',
 						description: 'Collect status updates from all team members',
 					},
+					{
+						name: 'Check Project Completion',
+						value: 'checkCompletion',
+						description: 'Monitor project for completion signals and readiness',
+					},
+					{
+						name: 'Push to Remote',
+						value: 'pushToRemote',
+						description: 'Push worktree branch to remote repository',
+					},
+					{
+						name: 'Create Pull Request',
+						value: 'createPullRequest',
+						description: 'Create GitHub pull request for completed project',
+					},
+					{
+						name: 'Complete Project',
+						value: 'completeProject',
+						description: 'Full project completion workflow with PR creation',
+					},
 				],
 				default: 'createProject',
 			},
@@ -81,6 +101,18 @@ export class TmuxProjectManager implements INodeType {
 					},
 				},
 				description: 'Name for the project',
+			},
+			{
+				displayName: 'Use Git Worktree',
+				name: 'useWorktree',
+				type: 'boolean',
+				default: false,
+				displayOptions: {
+					show: {
+						operation: ['createProject'],
+					},
+				},
+				description: 'Create project as a git worktree instead of a regular repository',
 			},
 			{
 				displayName: 'Project Path',
@@ -145,7 +177,7 @@ export class TmuxProjectManager implements INodeType {
 				required: true,
 				displayOptions: {
 					show: {
-						operation: ['assignTask', 'getProgress', 'validateQuality', 'createTeamMember', 'dailyStandup'],
+						operation: ['assignTask', 'getProgress', 'validateQuality', 'createTeamMember', 'dailyStandup', 'checkCompletion', 'pushToRemote', 'createPullRequest', 'completeProject'],
 					},
 				},
 				description: 'Tmux session name of the project',
@@ -269,6 +301,46 @@ export class TmuxProjectManager implements INodeType {
 				},
 				description: 'Type of quality validation to perform',
 			},
+			// Pull Request parameters
+			{
+				displayName: 'PR Title',
+				name: 'prTitle',
+				type: 'string',
+				default: '',
+				displayOptions: {
+					show: {
+						operation: ['createPullRequest', 'completeProject'],
+					},
+				},
+				description: 'Title for the pull request',
+			},
+			{
+				displayName: 'PR Description',
+				name: 'prDescription',
+				type: 'string',
+				typeOptions: {
+					rows: 5,
+				},
+				default: '',
+				displayOptions: {
+					show: {
+						operation: ['createPullRequest', 'completeProject'],
+					},
+				},
+				description: 'Description for the pull request',
+			},
+			{
+				displayName: 'Target Branch',
+				name: 'targetBranch',
+				type: 'string',
+				default: 'main',
+				displayOptions: {
+					show: {
+						operation: ['pushToRemote', 'createPullRequest', 'completeProject'],
+					},
+				},
+				description: 'Target branch for the pull request',
+			},
 		],
 	};
 
@@ -317,6 +389,18 @@ export class TmuxProjectManager implements INodeType {
 					case 'dailyStandup':
 						result = await TmuxProjectManager.prototype.dailyStandup(this, i, bridge);
 						break;
+					case 'checkCompletion':
+						result = await TmuxProjectManager.prototype.checkCompletion(this, i, bridge);
+						break;
+					case 'pushToRemote':
+						result = await TmuxProjectManager.prototype.pushToRemote(this, i, bridge);
+						break;
+					case 'createPullRequest':
+						result = await TmuxProjectManager.prototype.createPullRequest(this, i, bridge);
+						break;
+					case 'completeProject':
+						result = await TmuxProjectManager.prototype.completeProject(this, i, bridge);
+						break;
 				}
 
 				returnData.push({
@@ -345,16 +429,96 @@ export class TmuxProjectManager implements INodeType {
 		const projectPath = context.getNodeParameter('projectPath', itemIndex) as string;
 		const projectSpec = context.getNodeParameter('projectSpec', itemIndex, '') as string;
 		const teamSize = context.getNodeParameter('teamSize', itemIndex) as string;
+		const useWorktree = context.getNodeParameter('useWorktree', itemIndex, false) as boolean;
 
 		try {
+			// Handle worktree creation if enabled
+			let actualProjectPath = projectPath;
+			let worktreeBranch = '';
+			
+			if (useWorktree) {
+				// Get worktree configuration from credentials
+				let worktreeConfig: any = {};
+				try {
+					const credentials = await context.getCredentials('tmuxOrchestratorApi');
+					if (credentials?.worktreeConfig) {
+						worktreeConfig = credentials.worktreeConfig as any;
+					}
+				} catch {
+					// Use defaults
+				}
+				
+				const parentRepo = worktreeConfig.parentRepoPath || projectPath;
+				const worktreeBase = worktreeConfig.worktreeBasePath || '~/worktrees';
+				const mainBranch = worktreeConfig.mainBranch || 'main';
+				worktreeBranch = `feature/${projectName}-${Date.now()}`;
+				
+				// Create worktree
+				actualProjectPath = `${worktreeBase}/${projectName}`;
+				
+				// Ensure parent repo exists and is on main branch
+				try {
+					execSync(`cd ${parentRepo} && git checkout ${mainBranch} && git pull`, { stdio: 'pipe' });
+				} catch (error) {
+					// If parent repo doesn't exist, create it
+					execSync(`git init ${parentRepo} && cd ${parentRepo} && git checkout -b ${mainBranch}`, { stdio: 'pipe' });
+				}
+				
+				// Create the worktree
+				try {
+					execSync(`cd ${parentRepo} && git worktree add -b ${worktreeBranch} ${actualProjectPath}`, { stdio: 'pipe' });
+				} catch (error) {
+					throw new Error(`Failed to create worktree: ${error.message}`);
+				}
+			}
+			
 			// Define windows based on team size
 			const windows = this.getWindowsForTeamSize(teamSize);
 			
 			// Create the session with windows
-			await bridge.createSession(projectName, projectPath, windows);
+			await bridge.createSession(projectName, actualProjectPath, windows);
 
-			// Deploy Project Manager
-			execSync(`tmux send-keys -t ${projectName}:0 "claude" Enter`);
+			// Get credentials for proper agent configuration
+			let claudeCommand = 'claude';
+			let subagentConfig = '';
+			let worktreeConfig: any = {};
+			
+			try {
+				const credentials = await context.getCredentials('tmuxOrchestratorApi');
+				
+				// Build claude command with subagent support
+				if (credentials?.subagentConfig) {
+					const subagentCfg = credentials.subagentConfig as any;
+					if (subagentCfg.enableAllSubagents) {
+						subagentConfig = '--subagents all';
+					} else if (subagentCfg.customSubagents) {
+						subagentConfig = `--subagents ${subagentCfg.customSubagents}`;
+					}
+				}
+				
+				// Get worktree configuration
+				if (credentials?.worktreeConfig) {
+					worktreeConfig = credentials.worktreeConfig as any;
+				}
+				
+				// Add additional command options
+				if (credentials?.claudeCommandOptions) {
+					claudeCommand += ` ${credentials.claudeCommandOptions}`;
+				}
+				
+				// Use custom claude command if specified
+				if (credentials?.claudeCommand) {
+					claudeCommand = credentials.claudeCommand as string;
+				}
+			} catch {
+				// Credentials not configured, use defaults
+			}
+			
+			// Build the full command
+			const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+			
+			// Deploy Project Manager with proper configuration
+			execSync(`tmux send-keys -t ${projectName}:0 "${fullCommand}" Enter`);
 			await new Promise(resolve => setTimeout(resolve, 5000));
 
 			// Send PM briefing
@@ -566,8 +730,41 @@ Report any issues found and overall quality score.`);
 			// Create new window
 			execSync(`tmux new-window -t ${projectSession} -n "${windowName}"`);
 
-			// Start Claude agent
-			execSync(`tmux send-keys -t ${projectSession}:${newWindowIndex} "claude" Enter`);
+			// Get credentials for proper agent configuration
+			let claudeCommand = 'claude';
+			let subagentConfig = '';
+			
+			try {
+				const credentials = await context.getCredentials('tmuxOrchestratorApi');
+				
+				// Build claude command with subagent support
+				if (credentials?.subagentConfig) {
+					const subagentCfg = credentials.subagentConfig as any;
+					if (subagentCfg.enableAllSubagents) {
+						subagentConfig = '--subagents all';
+					} else if (subagentCfg.customSubagents) {
+						subagentConfig = `--subagents ${subagentCfg.customSubagents}`;
+					}
+				}
+				
+				// Add additional command options
+				if (credentials?.claudeCommandOptions) {
+					claudeCommand += ` ${credentials.claudeCommandOptions}`;
+				}
+				
+				// Use custom claude command if specified
+				if (credentials?.claudeCommand) {
+					claudeCommand = credentials.claudeCommand as string;
+				}
+			} catch {
+				// Credentials not configured, use defaults
+			}
+			
+			// Build the full command
+			const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+			
+			// Start Claude agent with proper configuration
+			execSync(`tmux send-keys -t ${projectSession}:${newWindowIndex} "${fullCommand}" Enter`);
 			await new Promise(resolve => setTimeout(resolve, 5000));
 
 			// Send role briefing
@@ -701,15 +898,80 @@ CRITICAL: You have access to the Task tool which can deploy specialized subagent
 
 Example: Task tool with prompt='Create comprehensive test suite for authentication' and subagent_type='test-automator'
 
+🎯 **COMPLETION CRITERIA - CRITICAL**:
+When ALL project objectives are met and code is ready for production:
+1. Respond with exactly "PROJECT COMPLETE" in your message
+2. Ensure all deliverables are finished and tested
+3. Confirm QA has approved all changes
+4. This triggers automatic PR creation and project finalization
+
+**AUTONOMOUS WORKFLOW**:
+This project uses autonomous completion monitoring. When you signal "PROJECT COMPLETE":
+- System automatically pushes code to remote repository
+- Creates pull request with project summary
+- Notifies stakeholders of completion
+- Archives project session
+
 PROJECT SPECIFICATION:
 ${projectSpec}
 
-First, analyze the project requirements and identify opportunities for parallel execution with subagents. Don't try to do everything yourself - delegate to specialists!`;
+First, analyze the project requirements and identify opportunities for parallel execution with subagents. When everything is complete, use the exact phrase "PROJECT COMPLETE" to trigger autonomous finalization!`;
 	}
 
 	private async deployInitialTeam(projectName: string, teamSize: string, bridge: TmuxBridge): Promise<void> {
-		// This would deploy additional team members based on team size
-		// Implementation depends on specific requirements
+		// Get credentials for proper agent configuration
+		let claudeCommand = 'claude';
+		let subagentConfig = '';
+		
+		// Note: credentials would need to be passed from calling context
+		// For now, using defaults with subagent support enabled
+		subagentConfig = '--subagents all';
+		
+		// Build the full command
+		const fullCommand = `${claudeCommand} ${subagentConfig}`.trim();
+		
+		// Deploy team members based on team size
+		const deployAgent = async (windowIndex: number, role: string) => {
+			// Start Claude agent
+			execSync(`tmux send-keys -t ${projectName}:${windowIndex} "${fullCommand}" Enter`);
+			await new Promise(resolve => setTimeout(resolve, 5000));
+			
+			// Send role briefing
+			const roleBriefing = this.getRoleBriefing(role);
+			await bridge.sendClaudeMessage(`${projectName}:${windowIndex}`, roleBriefing);
+		};
+		
+		switch (teamSize) {
+			case 'medium':
+				// Deploy Developer-1
+				await deployAgent(1, 'developer');
+				// Deploy Developer-2
+				await deployAgent(2, 'developer');
+				// Deploy QA Engineer
+				await deployAgent(3, 'qaEngineer');
+				break;
+			case 'large':
+				// Deploy Tech Lead
+				await deployAgent(1, 'developer');
+				// Deploy Developer-1
+				await deployAgent(2, 'developer');
+				// Deploy Developer-2
+				await deployAgent(3, 'developer');
+				// Deploy QA Engineer
+				await deployAgent(4, 'qaEngineer');
+				// Deploy DevOps
+				await deployAgent(5, 'devops');
+				break;
+			case 'small':
+			default:
+				// Deploy single Developer
+				await deployAgent(1, 'developer');
+				break;
+		}
+		
+		// Notify PM about team deployment
+		await bridge.sendClaudeMessage(`${projectName}:0`, 
+			`Team deployment complete. ${teamSize} team is ready. Please brief team members on project tasks.`);
 	}
 
 	private getValidationChecklist(validationType: string): string {
@@ -773,5 +1035,321 @@ First, analyze the project requirements and identify opportunities for parallel 
 		};
 
 		return briefings[role] || 'You are a team member on this project.';
+	}
+
+	private async checkCompletion(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+		const projectSession = context.getNodeParameter('projectSession', itemIndex) as string;
+
+		try {
+			// Get all windows
+			const sessions = await bridge.getTmuxSessions();
+			const projectSessionData = sessions.find(s => s.name === projectSession);
+			
+			if (!projectSessionData) {
+				throw new Error(`Session ${projectSession} not found`);
+			}
+
+			// Check PM for completion signals
+			await bridge.sendClaudeMessage(`${projectSession}:0`, 
+				'STATUS REQUEST: Please report if project is complete and ready for pull request. Respond with "PROJECT COMPLETE" if all objectives are met and code is ready for PR.');
+
+			// Wait for response
+			await new Promise(resolve => setTimeout(resolve, 3000));
+
+			// Capture PM response
+			const pmOutput = await bridge.captureWindowContent(projectSession, 0, 50);
+			
+			let pmResponse = '';
+			try {
+				if (typeof pmOutput === 'string' && pmOutput.length > 0) {
+					pmResponse = pmOutput.split('\n').slice(-20).join('\n');
+				} else {
+					pmResponse = 'No response available';
+				}
+			} catch (error) {
+				pmResponse = `Error processing PM response: ${error.message}`;
+			}
+
+			// Check for completion signals
+			const completionSignals = [
+				'PROJECT COMPLETE',
+				'project complete',
+				'ready for PR',
+				'ready for pull request',
+				'objectives met',
+				'deliverables complete'
+			];
+
+			const isComplete = completionSignals.some(signal => 
+				pmResponse.toLowerCase().includes(signal.toLowerCase())
+			);
+
+			// Also check QA status
+			let qaApproved = false;
+			try {
+				const qaOutput = await bridge.captureWindowContent(projectSession, 1, 20);
+				if (typeof qaOutput === 'string') {
+					qaApproved = qaOutput.toLowerCase().includes('approved') || 
+								qaOutput.toLowerCase().includes('qa approved') ||
+								qaOutput.toLowerCase().includes('tests passed');
+				}
+			} catch {
+				// QA window might not exist
+			}
+
+			return {
+				success: true,
+				projectSession,
+				isComplete,
+				qaApproved,
+				pmResponse,
+				readyForPR: isComplete && qaApproved,
+				timestamp: new Date().toISOString(),
+				recommendations: isComplete ? ['Project appears complete - consider creating PR'] : ['Project still in progress'],
+			};
+		} catch (error) {
+			throw new Error(`Failed to check completion: ${error.message}`);
+		}
+	}
+
+	private async pushToRemote(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+		const projectSession = context.getNodeParameter('projectSession', itemIndex) as string;
+		const targetBranch = context.getNodeParameter('targetBranch', itemIndex) as string;
+
+		try {
+			// Get project path from session data or use working directory
+			const sessions = await bridge.getTmuxSessions();
+			const projectSessionData = sessions.find(s => s.name === projectSession);
+			
+			if (!projectSessionData) {
+				throw new Error(`Session ${projectSession} not found`);
+			}
+
+			// Get current working directory from the session
+			await bridge.sendCommandToWindow(projectSession, 0, 'pwd');
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			const output = await bridge.captureWindowContent(projectSession, 0, 5);
+			let projectPath = '';
+			if (typeof output === 'string') {
+				const lines = output.trim().split('\n');
+				projectPath = lines[lines.length - 1].trim();
+			}
+
+			if (!projectPath || projectPath === '') {
+				throw new Error('Could not determine project path');
+			}
+
+			// Get the current branch name
+			const branchNameCmd = `cd ${projectPath} && git branch --show-current`;
+			await bridge.sendCommandToWindow(projectSession, 0, branchNameCmd);
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			const branchOutput = await bridge.captureWindowContent(projectSession, 0, 5);
+			let currentBranch = '';
+			if (typeof branchOutput === 'string') {
+				const lines = branchOutput.trim().split('\n');
+				currentBranch = lines[lines.length - 1].trim();
+			}
+
+			if (!currentBranch) {
+				throw new Error('Could not determine current branch');
+			}
+
+			// Push to remote
+			const pushCmd = `cd ${projectPath} && git add . && git commit -m "Final commit before PR" && git push -u origin ${currentBranch}`;
+			await bridge.sendCommandToWindow(projectSession, 0, pushCmd);
+			
+			// Wait for push to complete
+			await new Promise(resolve => setTimeout(resolve, 5000));
+			
+			// Check if push was successful
+			const pushOutput = await bridge.captureWindowContent(projectSession, 0, 10);
+			let pushSuccess = false;
+			if (typeof pushOutput === 'string') {
+				pushSuccess = pushOutput.includes('To ') && 
+							 (pushOutput.includes('new branch') || pushOutput.includes('up to date'));
+			}
+
+			return {
+				success: pushSuccess,
+				projectSession,
+				projectPath,
+				currentBranch,
+				targetBranch,
+				pushed: pushSuccess,
+				message: pushSuccess ? `Successfully pushed ${currentBranch} to origin` : 'Push may have failed - check output',
+				pushOutput: typeof pushOutput === 'string' ? pushOutput.split('\n').slice(-10).join('\n') : 'No output',
+				timestamp: new Date().toISOString(),
+			};
+		} catch (error) {
+			throw new Error(`Failed to push to remote: ${error.message}`);
+		}
+	}
+
+	private async createPullRequest(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+		const projectSession = context.getNodeParameter('projectSession', itemIndex) as string;
+		const prTitle = context.getNodeParameter('prTitle', itemIndex, '') as string;
+		const prDescription = context.getNodeParameter('prDescription', itemIndex, '') as string;
+		const targetBranch = context.getNodeParameter('targetBranch', itemIndex) as string;
+
+		try {
+			// Get project path
+			await bridge.sendCommandToWindow(projectSession, 0, 'pwd');
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			const output = await bridge.captureWindowContent(projectSession, 0, 5);
+			let projectPath = '';
+			if (typeof output === 'string') {
+				const lines = output.trim().split('\n');
+				projectPath = lines[lines.length - 1].trim();
+			}
+
+			// Get current branch
+			const branchCmd = `cd ${projectPath} && git branch --show-current`;
+			await bridge.sendCommandToWindow(projectSession, 0, branchCmd);
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			const branchOutput = await bridge.captureWindowContent(projectSession, 0, 5);
+			let currentBranch = '';
+			if (typeof branchOutput === 'string') {
+				const lines = branchOutput.trim().split('\n');
+				currentBranch = lines[lines.length - 1].trim();
+			}
+
+			// Generate PR title if not provided
+			const finalTitle = prTitle || `Feature: ${projectSession} implementation`;
+			
+			// Generate PR description if not provided
+			const finalDescription = prDescription || `
+## Summary
+Implementation of ${projectSession} project.
+
+## Changes
+- Project implementation completed
+- QA validation passed
+- Ready for review
+
+## Test Plan
+- All tests passing
+- QA approval obtained
+
+🤖 Generated with Claude Code Tmux Orchestrator
+			`.trim();
+
+			// Create PR using GitHub CLI
+			const prCmd = `cd ${projectPath} && gh pr create --title "${finalTitle}" --body "${finalDescription}" --base ${targetBranch} --head ${currentBranch}`;
+			await bridge.sendCommandToWindow(projectSession, 0, prCmd);
+			
+			// Wait for PR creation
+			await new Promise(resolve => setTimeout(resolve, 5000));
+			
+			// Check PR creation result
+			const prOutput = await bridge.captureWindowContent(projectSession, 0, 15);
+			let prSuccess = false;
+			let prUrl = '';
+			
+			if (typeof prOutput === 'string') {
+				prSuccess = prOutput.includes('https://github.com') || prOutput.includes('pull request created');
+				
+				// Extract PR URL
+				const urlMatch = prOutput.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+				if (urlMatch) {
+					prUrl = urlMatch[0];
+				}
+			}
+
+			// Notify PM of PR creation
+			if (prSuccess) {
+				await bridge.sendClaudeMessage(`${projectSession}:0`, 
+					`🎉 SUCCESS: Pull request created successfully!\n\nPR URL: ${prUrl}\n\nTitle: ${finalTitle}\n\nThe project is now ready for review and merge.`);
+			}
+
+			return {
+				success: prSuccess,
+				projectSession,
+				projectPath,
+				currentBranch,
+				targetBranch,
+				prTitle: finalTitle,
+				prDescription: finalDescription,
+				prUrl,
+				prCreated: prSuccess,
+				message: prSuccess ? `PR created successfully: ${prUrl}` : 'PR creation may have failed - check output',
+				prOutput: typeof prOutput === 'string' ? prOutput.split('\n').slice(-10).join('\n') : 'No output',
+				timestamp: new Date().toISOString(),
+			};
+		} catch (error) {
+			throw new Error(`Failed to create pull request: ${error.message}`);
+		}
+	}
+
+	private async completeProject(context: IExecuteFunctions, itemIndex: number, bridge: TmuxBridge): Promise<any> {
+		const projectSession = context.getNodeParameter('projectSession', itemIndex) as string;
+		const prTitle = context.getNodeParameter('prTitle', itemIndex, '') as string;
+		const prDescription = context.getNodeParameter('prDescription', itemIndex, '') as string;
+		const targetBranch = context.getNodeParameter('targetBranch', itemIndex) as string;
+
+		try {
+			// Step 1: Check completion status
+			const completionResult = await this.checkCompletion(context, itemIndex, bridge);
+			
+			if (!completionResult.readyForPR) {
+				return {
+					success: false,
+					projectSession,
+					step: 'completion_check',
+					isComplete: completionResult.isComplete,
+					qaApproved: completionResult.qaApproved,
+					message: 'Project not ready for completion. PM must signal completion and QA must approve.',
+					recommendations: [
+						'Ensure PM reports "PROJECT COMPLETE"',
+						'Verify QA has approved all changes',
+						'Check that all deliverables are finished'
+					],
+				};
+			}
+
+			// Step 2: Push to remote
+			const pushResult = await this.pushToRemote(context, itemIndex, bridge);
+			
+			if (!pushResult.success) {
+				return {
+					success: false,
+					projectSession,
+					step: 'push_to_remote',
+					pushResult,
+					message: 'Failed to push changes to remote repository',
+				};
+			}
+
+			// Step 3: Create pull request
+			const prResult = await this.createPullRequest(context, itemIndex, bridge);
+
+			// Notify team of completion
+			if (prResult.success) {
+				await bridge.sendClaudeMessage(`${projectSession}:0`, 
+					`🚀 PROJECT COMPLETED SUCCESSFULLY!\n\nPull Request: ${prResult.prUrl}\n\nNext Steps:\n- Review and merge the PR\n- Deploy to production\n- Project archival\n\nGreat work team! 🎉`);
+			}
+
+			return {
+				success: prResult.success,
+				projectSession,
+				completedSteps: [
+					{ step: 'completion_check', success: true, result: completionResult },
+					{ step: 'push_to_remote', success: pushResult.success, result: pushResult },
+					{ step: 'create_pull_request', success: prResult.success, result: prResult },
+				],
+				finalResult: prResult,
+				projectCompleted: prResult.success,
+				prUrl: prResult.prUrl,
+				message: prResult.success 
+					? `Project completed successfully! PR created: ${prResult.prUrl}` 
+					: 'Project completion workflow encountered issues',
+				timestamp: new Date().toISOString(),
+			};
+		} catch (error) {
+			throw new Error(`Failed to complete project: ${error.message}`);
+		}
 	}
 }

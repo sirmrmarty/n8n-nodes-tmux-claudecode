@@ -211,5 +211,151 @@ export class TmuxOrchestratorApi implements ICredentialType {
 			},
 			description: 'Slack webhook URL for notifications',
 		},
+		{
+			displayName: 'Git Worktree Configuration',
+			name: 'worktreeConfig',
+			type: 'collection',
+			default: {},
+			description: 'Configure git worktree support for projects',
+			options: [
+				{
+					displayName: 'Use Git Worktree',
+					name: 'useGitWorktree',
+					type: 'boolean',
+					default: false,
+					description: 'Create git worktrees for projects instead of regular repos',
+				},
+				{
+					displayName: 'Main Branch',
+					name: 'mainBranch',
+					type: 'string',
+					default: 'main',
+					description: 'Name of the main branch to create worktrees from',
+				},
+				{
+					displayName: 'Worktree Base Path',
+					name: 'worktreeBasePath',
+					type: 'string',
+					default: '~/worktrees',
+					description: 'Base directory for git worktrees',
+				},
+				{
+					displayName: 'Parent Repository Path',
+					name: 'parentRepoPath',
+					type: 'string',
+					default: '',
+					description: 'Path to parent repository for worktrees',
+				},
+			],
+		},
+		{
+			displayName: 'Subagent Configuration',
+			name: 'subagentConfig',
+			type: 'collection',
+			default: {},
+			description: 'Configure available subagents for Claude Code',
+			options: [
+				{
+					displayName: 'Enable All Subagents',
+					name: 'enableAllSubagents',
+					type: 'boolean',
+					default: true,
+					description: 'Enable all available Claude Code subagents',
+				},
+				{
+					displayName: 'Custom Subagents',
+					name: 'customSubagents',
+					type: 'string',
+					default: '',
+					displayOptions: {
+						show: {
+							enableAllSubagents: [false],
+						},
+					},
+					description: 'Comma-separated list of specific subagents to enable (e.g. developer,qa-expert,code-reviewer)',
+				},
+			],
+		},
+		{
+			displayName: 'MCP Server Configuration',
+			name: 'mcpServers',
+			type: 'json',
+			default: JSON.stringify({
+				filesystem: {
+					command: 'npx',
+					args: ['-y', '@modelcontextprotocol/server-filesystem', '/home'],
+				},
+				github: {
+					command: 'npx',
+					args: ['-y', '@modelcontextprotocol/server-github'],
+					env: {
+						GITHUB_TOKEN: 'your-github-token',
+					},
+				},
+			}, null, 2),
+			description: 'MCP server configuration for agent tools',
+		},
+		{
+			displayName: 'Claude Command Options',
+			name: 'claudeCommandOptions',
+			type: 'string',
+			default: '',
+			description: 'Additional command-line options for claude (e.g. --model claude-3-opus-20240229)',
+		},
+		{
+			displayName: 'GitHub Configuration',
+			name: 'githubConfig',
+			type: 'collection',
+			default: {},
+			description: 'Configure GitHub integration for pull requests',
+			options: [
+				{
+					displayName: 'GitHub Token',
+					name: 'githubToken',
+					type: 'string',
+					typeOptions: {
+						password: true,
+					},
+					default: '',
+					description: 'GitHub personal access token for API operations',
+				},
+				{
+					displayName: 'Default Repository',
+					name: 'defaultRepository',
+					type: 'string',
+					default: '',
+					description: 'Default GitHub repository (format: owner/repo)',
+				},
+				{
+					displayName: 'Auto-create PR',
+					name: 'autoCreatePR',
+					type: 'boolean',
+					default: false,
+					description: 'Automatically create PR when project is completed',
+				},
+				{
+					displayName: 'PR Template',
+					name: 'prTemplate',
+					type: 'string',
+					typeOptions: {
+						rows: 10,
+					},
+					default: `## Summary
+{project_description}
+
+## Changes
+- {changes_summary}
+
+## Test Plan
+- {test_summary}
+
+## QA Status
+- {qa_status}
+
+🤖 Generated with Claude Code Tmux Orchestrator`,
+					description: 'Template for pull request descriptions',
+				},
+			],
+		},
 	];
 }
