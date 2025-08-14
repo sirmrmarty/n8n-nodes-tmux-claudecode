@@ -1,6 +1,6 @@
 {
   "name": "@sirmrmarty/n8n-nodes-tmux-orchestrator",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "n8n nodes for orchestrating Claude AI agents through tmux sessions",
   "keywords": [
     "n8n-community-node-package",
